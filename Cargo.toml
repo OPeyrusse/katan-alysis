@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/jfr-model"]
+members = ["crates/jfr-model", "crates/jfr-ingest"]
 # The Tauri shell is its own workspace: it needs system libraries (webkit2gtk,
 # gtk) that the pure data crates must not depend on to build and test.
 exclude = ["app/src-tauri"]
@@ -13,3 +13,5 @@ license = "Apache-2.0"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+jfrs = "0.2.5"
+thiserror = "2"

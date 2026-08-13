@@ -1,0 +1,10 @@
+[package]
+name = "jfr-ingest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+jfr-model = { path = "../jfr-model" }
+jfrs = { workspace = true }
+thiserror = { workspace = true }
