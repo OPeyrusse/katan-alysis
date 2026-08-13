@@ -1,0 +1,11 @@
+[package]
+name = "jfr-aggregate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+jfr-model = { path = "../jfr-model" }
+
+[dev-dependencies]
+jfr-ingest = { path = "../jfr-ingest" }
