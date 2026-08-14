@@ -101,6 +101,51 @@ jobs:
           path: app/ui/dist
           destination: ui-dist
 
+  # Full desktop build (Linux only): produces the release binary and the
+  # .deb package as build artifacts. Runs on main only — it is the most
+  # expensive job of the workflow.
+  tauri-build:
+    docker:
+      - image: cimg/rust:1.94-node
+    resource_class: large
+    steps:
+      - checkout
+      - run:
+          name: Install Tauri system dependencies
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+              libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: sudo corepack enable
+      - restore_cache:
+          keys:
+            - tauri-release-v1-{{ checksum "app/src-tauri/Cargo.lock" }}
+            - tauri-release-v1-
+      - restore_cache:
+          keys:
+            - pnpm-v1-{{ checksum "pnpm-lock.yaml" }}
+            - pnpm-v1-
+      - run: pnpm install --frozen-lockfile
+      - run:
+          name: Build the desktop app (binary + .deb)
+          command: pnpm tauri build
+      - run:
+          name: Collect artifacts
+          command: |
+            mkdir -p /tmp/tauri-artifacts
+            cp app/src-tauri/target/release/katan-alysis /tmp/tauri-artifacts/
+            cp app/src-tauri/target/release/bundle/deb/*.deb /tmp/tauri-artifacts/
+            ls -lh /tmp/tauri-artifacts
+      - store_artifacts:
+          path: /tmp/tauri-artifacts
+          destination: app
+      - save_cache:
+          key: tauri-release-v1-{{ checksum "app/src-tauri/Cargo.lock" }}
+          paths:
+            - ~/.cargo/registry
+            - ~/.cargo/git
+            - app/src-tauri/target
+
 workflows:
   ci:
     jobs:
@@ -110,3 +155,7 @@ workflows:
       - ui-build:
           requires:
             - ui-test
+      - tauri-build:
+          filters:
+            branches:
+              only: main

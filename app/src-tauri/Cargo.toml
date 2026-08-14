@@ -8,6 +8,10 @@ license = "Apache-2.0"
 # gtk) that the data crates in the root workspace must stay free of.
 [workspace]
 
+[profile.release]
+strip = true
+lto = "thin"
+
 [lib]
 name = "katan_alysis_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

@@ -49,5 +49,15 @@ pnpm -C app/ui lint
 pnpm -C app/ui build
 ```
 
-Run the desktop app in dev mode: `cargo tauri dev` from `app/src-tauri`
-(or `pnpm dlx @tauri-apps/cli dev`).
+Run the desktop app in dev mode: `pnpm tauri dev` (from the repo root).
+
+Release build (Linux binary + .deb package):
+
+```
+pnpm tauri build
+# -> app/src-tauri/target/release/katan-alysis
+# -> app/src-tauri/target/release/bundle/deb/*.deb
+```
+
+CI builds both on every commit to `main` (job `tauri-build`) and publishes
+them as build artifacts under `app/`.
