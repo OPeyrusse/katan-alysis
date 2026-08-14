@@ -23,6 +23,16 @@ Rust data crates (no system dependencies):
 cargo test --workspace
 ```
 
+Coverage (same gate as CI — fails under 80% line coverage; needs
+`rustup component add llvm-tools-preview` and [cargo-llvm-cov]):
+
+```
+cargo llvm-cov --workspace --fail-under-lines 80   # per-module summary + gate
+cargo llvm-cov report --html                       # browsable report in target/llvm-cov/html
+```
+
+[cargo-llvm-cov]: https://github.com/taiki-e/cargo-llvm-cov
+
 Tauri shell (needs `libwebkit2gtk-4.1-dev`, `libgtk-3-dev` on Linux):
 
 ```

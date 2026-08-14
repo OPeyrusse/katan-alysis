@@ -1,7 +1,8 @@
 version: 2.1
 
 jobs:
-  # Data crates: format, lints, tests. No system dependencies needed.
+  # Data crates: format, lints, tests under coverage. No system dependencies
+  # needed. The build fails when line coverage drops below 80%.
   rust-test:
     docker:
       - image: cimg/rust:1.94
@@ -11,9 +12,24 @@ jobs:
           keys:
             - cargo-v1-{{ checksum "Cargo.lock" }}
             - cargo-v1-
+      - run:
+          name: Install cargo-llvm-cov
+          command: |
+            rustup component add llvm-tools-preview
+            curl -LsSf https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz \
+              | tar xzf - -C ~/.cargo/bin
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run:
+          name: Tests with coverage gate (fails under 80% line coverage)
+          command: cargo llvm-cov --workspace --fail-under-lines 80
+      - run:
+          name: Per-module HTML coverage report
+          command: cargo llvm-cov report --html
+          when: always
+      - store_artifacts:
+          path: target/llvm-cov/html
+          destination: coverage
       - save_cache:
           key: cargo-v1-{{ checksum "Cargo.lock" }}
           paths:
