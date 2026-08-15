@@ -10,10 +10,12 @@ use std::collections::HashMap;
 use jfr_model::{Filters, Profile, StackId};
 
 pub mod density;
+pub mod overview;
 pub mod thread_activity;
 pub mod top_methods;
 
 pub use density::sample_density;
+pub use overview::resample_max;
 pub use thread_activity::thread_sample_counts;
 pub use top_methods::top_methods;
 

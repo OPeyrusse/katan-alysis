@@ -80,6 +80,7 @@ mod tests {
                     stack: StackId(stack),
                 })
                 .collect(),
+            ..Profile::default()
         }
     }
 

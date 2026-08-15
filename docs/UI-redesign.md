@@ -218,7 +218,7 @@ d'infos demandent d'ingérer de nouveaux événements JFR :
 | Infos JVM | `jdk.JVMInformation` (nom, version), `jdk.InitialSystemProperty` |
 | Infos GC | `jdk.GCConfiguration`, `jdk.GCHeapConfiguration` |
 | Infos OS | `jdk.OSInformation`, `jdk.CPUInformation`, `jdk.PhysicalMemory` |
-| Options (Xmx/Xms, MaxDirectMemorySize, DebugNonSafepoints) | `jdk.ULongFlag` / `jdk.BooleanFlag` (une occurrence par flag, avec valeur et origine : ligne de commande, ergonomique ou défaut) |
+| Options (Xmx/Xms, MaxDirectMemorySize, DebugNonSafepoints) | `jdk.UnsignedLongFlag` / `jdk.BooleanFlag` (une occurrence par flag, avec valeur et origine : ligne de commande, ergonomique ou défaut) |
 
 Chaque série est facultative : un recording async-profiler n'aura souvent
 que les samples → la vue d'ensemble affiche « données absentes de ce

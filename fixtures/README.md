@@ -24,6 +24,35 @@ including any secrets they contain. The minimal settings enable
 have a non-zero count) and update the sample count asserted in
 `crates/jfr-ingest/tests/fixture.rs` (currently 570).
 
+## fixture-metadata.jfr
+
+JDK-produced recording of `MetadataWorkload.java` (CPU burn + allocation
+churn), used by the metadata/overview ingestion tests: execution samples
+plus the overview signals (`jdk.CPULoad`, `jdk.GCHeapSummary`,
+`jdk.ResidentSetSize`, `jdk.GarbageCollection`) and the one-shot metadata
+events (`jdk.JVMInformation`, `jdk.GCConfiguration`,
+`jdk.GCHeapConfiguration`, `jdk.OSInformation`, `jdk.CPUInformation`,
+`jdk.PhysicalMemory`, `jdk.UnsignedLongFlag`, `jdk.BooleanFlag`).
+
+Regenerate with (note `env -u JAVA_TOOL_OPTIONS`: anything in that
+variable ends up verbatim in the recording's `jvmArguments`):
+
+```
+javac MetadataWorkload.java
+env -u JAVA_TOOL_OPTIONS java -Xmx256m -Xms128m -XX:MaxDirectMemorySize=64m \
+    -XX:+UnlockDiagnosticVMOptions -XX:+DebugNonSafepoints \
+    -XX:StartFlightRecording=filename=fixture-metadata.jfr,settings=$PWD/metadata-profile.jfc,duration=6s \
+    MetadataWorkload 4000
+```
+
+**Always record with `metadata-profile.jfc`**: like `minimal-profile.jfc`
+it excludes environment variables, system properties and process lists —
+flag events only carry names, values and origins. After regenerating,
+check `jfr summary` and update the counts asserted in
+`crates/jfr-ingest/tests/fixture_metadata.rs` (samples, CPULoad, RSS) and
+`jfr print --events jdk.JVMInformation` to confirm `jvmArguments` holds
+only the flags above.
+
 ## Still missing
 
 An async-profiler recording of a real workload, to validate the `jfrs`
