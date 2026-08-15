@@ -7,14 +7,21 @@
 //! integer range, relative ones don't.
 
 use std::fs::File;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use jfr_model::{Filters, Frame, Profile, ThreadId, ThreadInfo, TopMethods};
 use serde::{Deserialize, Serialize};
 
+use crate::recents::{self, RecentRecording};
+
 /// The recording currently loaded in the application.
 #[derive(Default)]
 pub struct RecordingState(Mutex<Option<Profile>>);
+
+/// Where the recents list is persisted; resolved once at startup from the
+/// app config directory.
+pub struct RecentsState(pub PathBuf);
 
 /// What the UI needs up front: dictionaries and global bounds. Views then
 /// reference frames and threads by index.
@@ -40,12 +47,27 @@ pub struct RelativeFilters {
     pub time_range_nanos: Option<(i64, i64)>,
 }
 
-pub fn open_recording_impl(state: &RecordingState, path: &str) -> Result<ProfileSummary, String> {
+pub fn open_recording_impl(
+    state: &RecordingState,
+    recents_store: &Path,
+    path: &str,
+    now_ms: u64,
+) -> Result<ProfileSummary, String> {
     let file = File::open(path).map_err(|e| format!("cannot open {path}: {e}"))?;
+    let size_bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
     let profile = jfr_ingest::read_profile(file).map_err(|e| e.to_string())?;
     let summary = summarize(&profile);
     *state.0.lock().unwrap() = Some(profile);
+    // Only successful opens enter the recents list, and the list is a
+    // convenience: failing to persist it must not fail the open itself.
+    let _ = recents::record_open(recents_store, path, size_bytes, now_ms);
     Ok(summary)
+}
+
+/// Drops the loaded recording. Filters live client-side and die with it;
+/// the recents list is untouched — closing is not forgetting.
+pub fn close_recording_impl(state: &RecordingState) {
+    *state.0.lock().unwrap() = None;
 }
 
 pub fn get_top_methods_impl(
@@ -82,12 +104,25 @@ fn to_absolute(profile: &Profile, filters: RelativeFilters) -> Filters {
     }
 }
 
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 #[tauri::command]
 pub fn open_recording(
     state: tauri::State<'_, RecordingState>,
+    recents: tauri::State<'_, RecentsState>,
     path: String,
 ) -> Result<ProfileSummary, String> {
-    open_recording_impl(&state, &path)
+    open_recording_impl(&state, &recents.0, &path, epoch_ms())
+}
+
+#[tauri::command]
+pub fn close_recording(state: tauri::State<'_, RecordingState>) {
+    close_recording_impl(&state);
 }
 
 #[tauri::command]
@@ -98,15 +133,42 @@ pub fn get_top_methods(
     get_top_methods_impl(&state, filters)
 }
 
+#[tauri::command]
+pub fn list_recent_recordings(recents: tauri::State<'_, RecentsState>) -> Vec<RecentRecording> {
+    recents::load(&recents.0)
+}
+
+#[tauri::command]
+pub fn remove_recent_recording(
+    recents: tauri::State<'_, RecentsState>,
+    path: String,
+) -> Result<Vec<RecentRecording>, String> {
+    recents::remove(&recents.0, &path)
+}
+
+#[tauri::command]
+pub fn clear_recent_recordings(
+    recents: tauri::State<'_, RecentsState>,
+) -> Result<Vec<RecentRecording>, String> {
+    recents::clear(&recents.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/fixture.jfr");
 
+    fn temp_store() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("recents.json");
+        (dir, store)
+    }
+
     fn loaded_state() -> (RecordingState, ProfileSummary) {
+        let (_dir, store) = temp_store();
         let state = RecordingState::default();
-        let summary = open_recording_impl(&state, FIXTURE).unwrap();
+        let summary = open_recording_impl(&state, &store, FIXTURE, 0).unwrap();
         (state, summary)
     }
 
@@ -121,9 +183,49 @@ mod tests {
 
     #[test]
     fn open_recording_reports_missing_file() {
+        let (_dir, store) = temp_store();
         let state = RecordingState::default();
-        let err = open_recording_impl(&state, "/nonexistent.jfr").unwrap_err();
+        let err = open_recording_impl(&state, &store, "/nonexistent.jfr", 0).unwrap_err();
         assert!(err.contains("/nonexistent.jfr"));
+    }
+
+    #[test]
+    fn a_successful_open_enters_the_recents_list() {
+        let (_dir, store) = temp_store();
+        let state = RecordingState::default();
+        open_recording_impl(&state, &store, FIXTURE, 1234).unwrap();
+        let list = recents::load(&store);
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].path, FIXTURE);
+        assert_eq!(list[0].last_opened_ms, 1234);
+        assert!(list[0].size_bytes > 0);
+    }
+
+    #[test]
+    fn a_failed_open_leaves_the_recents_list_alone() {
+        let (_dir, store) = temp_store();
+        let state = RecordingState::default();
+        open_recording_impl(&state, &store, FIXTURE, 1).unwrap();
+        let before = recents::load(&store);
+        open_recording_impl(&state, &store, "/nonexistent.jfr", 2).unwrap_err();
+        assert_eq!(recents::load(&store), before);
+    }
+
+    #[test]
+    fn a_failed_open_keeps_the_loaded_recording() {
+        let (state, summary) = loaded_state();
+        let (_dir, store) = temp_store();
+        open_recording_impl(&state, &store, "/nonexistent.jfr", 0).unwrap_err();
+        let view = get_top_methods_impl(&state, RelativeFilters::default()).unwrap();
+        assert_eq!(view.total_samples, summary.sample_count);
+    }
+
+    #[test]
+    fn close_recording_drops_the_profile() {
+        let (state, _) = loaded_state();
+        close_recording_impl(&state);
+        let err = get_top_methods_impl(&state, RelativeFilters::default()).unwrap_err();
+        assert!(err.contains("no recording loaded"));
     }
 
     #[test]

@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@solidjs/testing-library';
 import userEvent from '@testing-library/user-event';
 import { App } from './App';
 import { createProfileStore } from './state/profile';
+import type { Shell } from './api/shell';
 import type { ProfileSummary, TopMethods } from './api/client';
 
 const summary: ProfileSummary = {
@@ -26,45 +27,106 @@ const topMethods: TopMethods = {
   total_samples: 504,
 };
 
-function mockedStore() {
-  const client = {
+function mockedClient() {
+  return {
     openRecording: vi.fn().mockResolvedValue(summary),
+    closeRecording: vi.fn().mockResolvedValue(undefined),
     getTopMethods: vi.fn().mockResolvedValue(topMethods),
+    listRecentRecordings: vi.fn().mockResolvedValue([]),
+    removeRecentRecording: vi.fn().mockResolvedValue([]),
+    clearRecentRecordings: vi.fn().mockResolvedValue([]),
   };
-  return { store: createProfileStore(client), client };
+}
+
+function noShell(): Shell {
+  return {
+    pickRecordingFile: vi.fn().mockResolvedValue(null),
+    onFileDrop: vi.fn().mockResolvedValue(() => {}),
+  };
+}
+
+async function openedApp() {
+  const client = mockedClient();
+  const store = createProfileStore(client);
+  const shell = noShell();
+  render(() => <App store={store} shell={shell} />);
+  await userEvent.type(screen.getByLabelText(/Open by path/), '/tmp/rec.jfr');
+  await userEvent.click(screen.getByRole('button', { name: 'Open' }));
+  await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+  return { client, store, shell };
 }
 
 describe('App', () => {
-  it('renders the empty state before any recording is opened', () => {
-    render(() => <App store={mockedStore().store} />);
-    expect(screen.getByText('Open a JFR recording to get started.')).toBeInTheDocument();
+  it('shows the welcome screen before any recording is opened', () => {
+    render(() => <App store={createProfileStore(mockedClient())} shell={noShell()} />);
+    expect(screen.getByRole('heading', { name: 'katan-alysis' })).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
-  it('opens a recording and shows the top-methods table', async () => {
-    const { store, client } = mockedStore();
-    render(() => <App store={store} />);
-
-    await userEvent.type(screen.getByLabelText(/JFR file path/), '/tmp/rec.jfr');
-    await userEvent.click(screen.getByRole('button', { name: 'Open' }));
+  it('opens a recording into the top-methods view', async () => {
+    const { client } = await openedApp();
 
     expect(client.openRecording).toHaveBeenCalledWith('/tmp/rec.jfr');
-    await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
     expect(client.getTopMethods).toHaveBeenCalledWith({});
-    expect(screen.getByText(/504 samples/)).toBeInTheDocument();
+    expect(screen.getByText('rec.jfr')).toBeInTheDocument();
+    expect(screen.getByText(/504 samples in selection/)).toBeInTheDocument();
     expect(
       screen.getByRole('row', { name: /FixtureWorkload\.expensiveLeaf/ }),
     ).toBeInTheDocument();
+    // The sidebar shows the recording vitals.
+    expect(screen.getByText('3.2 s')).toBeInTheDocument();
   });
 
-  it('surfaces backend errors', async () => {
-    const client = {
-      openRecording: vi.fn().mockRejectedValue('cannot open /bad.jfr'),
-      getTopMethods: vi.fn(),
-    };
-    render(() => <App store={createProfileStore(client)} />);
+  it('navigates between the built views and disables the future ones', async () => {
+    await openedApp();
 
-    await userEvent.type(screen.getByLabelText(/JFR file path/), '/bad.jfr');
+    const overview = screen.getByRole('button', { name: 'Overview' });
+    await userEvent.click(overview);
+    expect(screen.getByText('The overview charts are not built yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Top methods' }));
+    expect(screen.getByRole('table')).toBeInTheDocument();
+
+    expect(screen.getByRole('button', { name: 'Flamegraph' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Heatmap' })).toBeDisabled();
+  });
+
+  it('closes the recording back to the welcome screen', async () => {
+    const { client } = await openedApp();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(client.closeRecording).toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'katan-alysis' })).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('opens a dropped file', async () => {
+    const client = mockedClient();
+    const store = createProfileStore(client);
+    const shell = noShell();
+    let drop: ((path: string) => void) | undefined;
+    (shell.onFileDrop as ReturnType<typeof vi.fn>).mockImplementation(
+      (handler: (path: string) => void) => {
+        drop = handler;
+        return Promise.resolve(() => {});
+      },
+    );
+    render(() => <App store={store} shell={shell} />);
+
+    expect(drop).toBeDefined();
+    drop!('/dropped.jfr');
+    await waitFor(() => expect(client.openRecording).toHaveBeenCalledWith('/dropped.jfr'));
+  });
+
+  it('surfaces backend errors on the welcome screen', async () => {
+    const client = mockedClient();
+    client.openRecording.mockRejectedValue('cannot open /bad.jfr');
+    render(() => <App store={createProfileStore(client)} shell={noShell()} />);
+
+    await userEvent.type(screen.getByLabelText(/Open by path/), '/bad.jfr');
     await userEvent.click(screen.getByRole('button', { name: 'Open' }));
 
     await waitFor(() =>

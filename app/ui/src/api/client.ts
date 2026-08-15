@@ -38,12 +38,35 @@ export interface RelativeFilters {
   time_range_nanos?: [number, number] | null;
 }
 
+// One entry of the persisted recents list, most recent first.
+export interface RecentRecording {
+  path: string;
+  size_bytes: number;
+  last_opened_ms: number;
+}
+
 export function openRecording(path: string): Promise<ProfileSummary> {
   return invoke('open_recording', { path });
 }
 
+export function closeRecording(): Promise<void> {
+  return invoke('close_recording');
+}
+
 export function getTopMethods(filters: RelativeFilters): Promise<TopMethods> {
   return invoke('get_top_methods', { filters });
+}
+
+export function listRecentRecordings(): Promise<RecentRecording[]> {
+  return invoke('list_recent_recordings');
+}
+
+export function removeRecentRecording(path: string): Promise<RecentRecording[]> {
+  return invoke('remove_recent_recording', { path });
+}
+
+export function clearRecentRecordings(): Promise<RecentRecording[]> {
+  return invoke('clear_recent_recordings');
 }
 
 export function frameLabel(frames: Frame[], id: number): string {

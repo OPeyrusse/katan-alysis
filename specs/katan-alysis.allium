@@ -7,6 +7,9 @@
 --
 -- Includes:
 --   - the outcome of opening a recording (loaded summary vs. error)
+--   - closing the recording, back to the welcome screen
+--   - the recent-recordings list: remembered opens, persisted across
+--     application restarts
 --   - the normalised profile: frames, stacks, threads, samples
 --   - the thread and time filters, applied before any aggregation
 --   - the top-methods aggregation (self / total sample counts)
@@ -58,6 +61,14 @@ value TimeWindow {
 
     duration_nanos: end_nanos - start_nanos
     is_empty: end_nanos < start_nanos
+}
+
+-- One line of the welcome screen's recents list: enough to recognise a
+-- recording and reopen it, nothing read from inside the file.
+value RecentEntry {
+    path: String
+    size_bytes: Integer
+    last_opened_ms: Integer
 }
 
 ------------------------------------------------------------
@@ -161,6 +172,10 @@ entity AnalysisWorkspace {
     selected_window: TimeWindow?
     -- Why the last attempt to open a recording failed, if it did.
     last_error: String?
+    -- What the welcome screen lists: recordings whose last open
+    -- succeeded, most recent first. Unlike the rest of the workspace
+    -- this list survives an application restart.
+    recent_recordings: List<RecentEntry>
 
     has_recording: profile != null
     selected_samples: profile.samples where is_selected
@@ -179,6 +194,14 @@ entity AnalysisWorkspace {
         (selected_threads = null or selected_threads.count > 0)
             and (selected_window = null or not selected_window.is_empty)
     }
+
+    -- The list is a shortlist, not a history: at most ten entries, one
+    -- per path — reopening a recording moves its entry to the front
+    -- instead of duplicating it.
+    invariant RecentsStayAShortlist {
+        recent_recordings.count <= 10
+            and recent_recordings.path.unique.count = recent_recordings.count
+    }
 }
 
 ------------------------------------------------------------
@@ -196,6 +219,11 @@ rule LoadRecording {
         workspace.selected_threads = null
         workspace.selected_window = null
         workspace.last_error = null
+        -- The open is remembered: the recording's entry moves to (or
+        -- appears at) the front of the recents list, and the entry
+        -- beyond the shortlist bound, if any, falls off the end.
+        workspace.recent_recordings =
+            remembered(workspace.recent_recordings, recording)
     @guidance
         -- Samples with no resolvable stack or thread contribute to no
         -- view and are dropped while reading; a recording made only of
@@ -207,8 +235,35 @@ rule RejectUnusableRecording {
     requires: not is_readable(recording) or not has_execution_samples(recording)
     ensures:
         -- The workspace keeps whatever was already open: a failed open
-        -- never costs the analyst the recording they were reading.
+        -- never costs the analyst the recording they were reading, and
+        -- never rewrites the recents list.
         workspace.last_error = failure_reason(recording)
+}
+
+rule CloseRecording {
+    when: AnalystClosesRecording(analyst)
+    requires: workspace.has_recording
+    ensures:
+        -- Filters die with the recording they narrowed. The recents
+        -- list is untouched: closing is not forgetting.
+        workspace.profile = null
+        workspace.selected_threads = null
+        workspace.selected_window = null
+        workspace.last_error = null
+}
+
+rule ForgetRecentRecording {
+    when: AnalystRemovesRecent(analyst, path)
+    ensures:
+        workspace.recent_recordings =
+            without(workspace.recent_recordings, path)
+}
+
+rule ClearRecentRecordings {
+    when: AnalystClearsRecents(analyst)
+    requires: workspace.recent_recordings.count > 0
+    ensures:
+        workspace.recent_recordings = []
 }
 
 rule NarrowToThreads {
@@ -289,14 +344,37 @@ surface RecordingLoader {
         workspace.profile.sample_count
         workspace.profile.duration_nanos
         workspace.profile.threads.name
+        for entry in workspace.recent_recordings:
+            entry.path
+            entry.size_bytes
+            entry.last_opened_ms
 
     provides:
         AnalystOpensRecording(analyst, recording)
+        AnalystClosesRecording(analyst)
+            when workspace.has_recording
+        AnalystRemovesRecent(analyst, path)
+            when workspace.recent_recordings.count > 0
+        AnalystClearsRecents(analyst)
+            when workspace.recent_recordings.count > 0
 
     @guarantee FailedOpenIsReported
         -- Opening a recording either yields a summary or a message
         -- naming what went wrong. It never fails silently, and never
         -- leaves the analyst looking at a half-loaded recording.
+
+    @guarantee OnlySuccessfulOpensAreRemembered
+        -- The recents list is a list of recordings that actually
+        -- opened: a failed open changes the error message, never the
+        -- list. Removing an entry, or clearing the list, forgets the
+        -- shortcut only — the file on disk is not the application's to
+        -- touch.
+
+    @guarantee RecentsSurviveARestart
+        -- The list is the one piece of workspace state that outlives
+        -- the process: quitting and relaunching the application shows
+        -- the same recents. Everything else — the loaded recording, the
+        -- filters — starts fresh.
 
     related:
         TopMethodsView() when workspace.has_recording
