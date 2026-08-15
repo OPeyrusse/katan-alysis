@@ -37,6 +37,9 @@ pnpm tauri dev                                      # run the desktop app
 - Filters (`threads`, `time_range_nanos`) are applied to the sample stream
   **before** aggregation. Views never post-process aggregated data, and the UI
   never filters client-side — a filter change re-queries the backend.
+- An empty filter is not a filter: an empty thread list, or a time range
+  holding no instant, widens back to the whole recording rather than emptying
+  the views. Each category is independent of the other.
 - `app/src-tauri` holds no logic. Every command is a thin wrapper over a plain
   function taking `&RecordingState`, so it is unit-testable without a webview.
 - Timestamps cross the IPC boundary relative to the start of the recording;

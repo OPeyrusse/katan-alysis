@@ -30,6 +30,9 @@ export interface TopMethods {
   total_samples: number;
 }
 
+// An empty selection is not a filter: an empty thread list, or a range
+// holding no instant, widens back to the whole recording. The UI can send
+// the selection as-is — it never has to special-case "nothing selected".
 export interface RelativeFilters {
   threads?: number[] | null;
   time_range_nanos?: [number, number] | null;

@@ -15,6 +15,10 @@
 --   - the JFR binary format and its parsing (jfrs library, external)
 --   - transport (Tauri IPC), rendering technology and packaging
 --   - views not yet built: flamegraph, heatmap, merged call tree
+--   - several recordings open at once. It is a decided direction, not
+--     an open question: the workspace will hold more than one profile
+--     so recordings can be compared. Until that work starts the spec
+--     describes the one-recording workspace that exists (docs/PLAN.md).
 
 ------------------------------------------------------------
 -- Given
@@ -46,12 +50,14 @@ external entity Analyst {
 
 -- An interval of recording-relative nanoseconds, both bounds included:
 -- the analyst who selects the whole span keeps every sample, last one
--- included.
+-- included. A window whose end precedes its start holds no instant and
+-- is therefore empty — it narrows nothing.
 value TimeWindow {
     start_nanos: Integer
     end_nanos: Integer
 
     duration_nanos: end_nanos - start_nanos
+    is_empty: end_nanos < start_nanos
 }
 
 ------------------------------------------------------------
@@ -145,8 +151,12 @@ entity Profile {
 entity AnalysisWorkspace {
     -- Absent until a recording has been opened successfully.
     profile: Profile?
-    -- Absent means "every thread" / "the whole recording"; an empty
-    -- thread set means "no thread", which selects nothing.
+    -- Absent means "every thread" / "the whole recording". An empty
+    -- filter is not a filter: selecting no thread, or a window holding
+    -- no instant, narrows nothing rather than emptying the views. The
+    -- analyst who deselects everything is not asking to see nothing,
+    -- and each category is independent — an empty thread selection
+    -- leaves an active time window alone.
     selected_threads: Set<ProfiledThread>?
     selected_window: TimeWindow?
     -- Why the last attempt to open a recording failed, if it did.
@@ -161,6 +171,13 @@ entity AnalysisWorkspace {
     invariant FiltersRequireARecording {
         not has_recording
             implies selected_threads = null and selected_window = null
+    }
+
+    -- Empty filters are normalised away as they are selected, so no
+    -- view has to decide what an empty filter means.
+    invariant NoEmptyFilterIsEverHeld {
+        (selected_threads = null or selected_threads.count > 0)
+            and (selected_window = null or not selected_window.is_empty)
     }
 }
 
@@ -197,7 +214,11 @@ rule RejectUnusableRecording {
 rule NarrowToThreads {
     when: AnalystSelectsThreads(analyst, threads)
     requires: workspace.has_recording
-    ensures: workspace.selected_threads = threads
+    ensures:
+        if threads.count = 0:
+            workspace.selected_threads = null
+        else:
+            workspace.selected_threads = threads
 }
 
 rule WidenToAllThreads {
@@ -209,8 +230,14 @@ rule WidenToAllThreads {
 rule NarrowToTimeWindow {
     when: AnalystSelectsTimeWindow(analyst, window)
     requires: workspace.has_recording
-    requires: window.start_nanos <= window.end_nanos
-    ensures: workspace.selected_window = window
+    ensures:
+        -- A brush that selects no instant clears the time filter; it is
+        -- how the analyst backs out of a selection, not a rejected
+        -- action.
+        if window.is_empty:
+            workspace.selected_window = null
+        else:
+            workspace.selected_window = window
 }
 
 rule WidenToWholeRecording {
@@ -305,6 +332,14 @@ surface TopMethodsView {
         -- Self and total percentages are read against the size of the
         -- current selection, not against the whole recording.
 
+    @guarantee EmptyingAFilterWidensTheTable
+        -- Emptying a filter never shrinks the table: deselecting every
+        -- thread, or brushing a window that holds no instant, widens
+        -- the selection back to the whole recording. A table can still
+        -- come out empty, but only from a selection that genuinely
+        -- matches no sample — a thread that was idle throughout the
+        -- selected window, say.
+
     @guidance
         -- The analyst reads this table to find where time goes: a high
         -- self count means the method itself is hot, a high total with
@@ -315,5 +350,4 @@ surface TopMethodsView {
 -- Open Questions
 ------------------------------------------------------------
 
-open question "Should an empty selection (no thread selected, or an empty time window) show an empty table or the unfiltered profile?"
-open question "Can more than one recording be open at once, for comparison, or is one workspace per recording the final design?"
+open question "When several recordings are open at once, is a filter selection per recording or shared across them?"

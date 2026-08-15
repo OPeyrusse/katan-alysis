@@ -195,6 +195,12 @@ livrable visible + testé en CI.
 - **J7 — Call-in/call-out fusionnés** : la vue inédite ; sélection d'une
   méthode depuis top-methods ou flamegraph.
 - **J8 — Packaging** : job `tauri-build` activé sur `main`, artefacts binaires.
+- **J9 — Plusieurs enregistrements ouverts** : le workspace tient plus d'un
+  profil, pour comparer deux enregistrements (avant/après un correctif, deux
+  environnements). Décidé, pas encore spécifié : `specs/katan-alysis.allium`
+  décrit le workspace à un seul enregistrement qui existe aujourd'hui, et
+  garde en `open question` le point à trancher — la sélection de filtres
+  est-elle par enregistrement ou partagée entre eux.
 
 ## 5. Risques et parades
 

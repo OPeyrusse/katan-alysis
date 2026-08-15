@@ -27,7 +27,13 @@ pub struct ProfileSummary {
     pub frames: Vec<Frame>,
 }
 
-/// Filters as sent by the UI: thread indices and a start-relative time range.
+/// Filters as sent by the UI: thread indices and a start-relative time
+/// range, both bounds included.
+///
+/// An empty selection is not a filter — an empty thread list, or a range
+/// holding no instant, widens back to the whole recording instead of
+/// emptying the views. That rule lives in [`Filters::accepts`]; here the
+/// relative range only has to survive the shift to absolute time.
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct RelativeFilters {
     pub threads: Option<Vec<u32>>,
@@ -146,6 +152,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(view.total_samples, summary.sample_count);
+    }
+
+    #[test]
+    fn an_empty_selection_keeps_every_sample() {
+        let (state, summary) = loaded_state();
+        for filters in [
+            RelativeFilters {
+                threads: Some(vec![]),
+                ..RelativeFilters::default()
+            },
+            // A brush that selected no instant: end before start.
+            RelativeFilters {
+                time_range_nanos: Some((summary.duration_nanos, 0)),
+                ..RelativeFilters::default()
+            },
+        ] {
+            let view = get_top_methods_impl(&state, filters.clone()).unwrap();
+            assert_eq!(view.total_samples, summary.sample_count, "{filters:?}");
+        }
     }
 
     #[test]
