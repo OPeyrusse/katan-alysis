@@ -78,25 +78,27 @@ temporels alignés sur le même axe X (toute la durée du recording).
 │            │  │ JVM              │ GC                │ Système              ││
 │ ▣ Vue      │  │ OpenJDK 21.0.4   │ G1 Young/Old      │ Linux 6.8 x86_64     ││
 │   d'ensem. │  │ 64-bit Server VM │ Heap max 8 Go     │ 16 cœurs · 64 Go RAM ││
-│ ▢ Top      │  │ -Xmx8g -Xms8g …  │ Régions 4 Mo      │ hôte: prod-pay-03    ││
-│   methods  │  └──────────────────┴───────────────────┴──────────────────────┘│
-│ ▢ Flame-   │                                                                 │
-│   graph    │  CPU (%)                    ── process user ·· process system   │
-│ ▢ Heatmap  │  100 ┤                                          ▄▄              │
-│ ▢ Appels   │   50 ┤      ▄▄▂▂▄▄▆▆████▆▆▄▄▂▂        ▂▂▄▄▆▆████████▆▆▄▄        │
-│   fusionnés│    0 ┼──────┴──────┴──────┴──────┴──────┴──────┴──────┴──────   │
-│ ▢ GC       │                                                                 │
+│ ▢ Top      │  │                  │ Régions 4 Mo      │ hôte: prod-pay-03    ││
+│   methods  │  ├──────────────────┴───────────────────┴──────────────────────┤│
+│ ▢ Flame-   │  │ Options  Xmx 8 Go · Xms 8 Go · MaxDirectMemorySize 512 Mo   ││
+│   graph    │  │          DebugNonSafepoints ✓ (activé)                      ││
+│ ▢ Heatmap  │  └──────────────────────────────────────────────────────────────┘│
+│ ▢ Appels   │                                                                 │
+│   fusionnés│  CPU (%)                    ── process user ·· process system   │
+│ ▢ GC       │  100 ┤                                          ▄▄              │
+│            │   50 ┤      ▄▄▂▂▄▄▆▆████▆▆▄▄▂▂        ▂▂▄▄▆▆████████▆▆▄▄        │
+│            │    0 ┼──────┴──────┴──────┴──────┴──────┴──────┴──────┴──────   │
+│            │                                                                 │
 │            │  Heap (Go)                  ── utilisé  ─ ─ committed  ··· max  │
-│            │    8 ┤···························································│
-│            │    4 ┤  ╱╲    ╱╲    ╱╲    ╱╲     ╱╲      ╱╲    ╱╲    ╱╲         │
-│  Recording │    0 ┼─╱──╲──╱──╲──╱──╲──╱──╲───╱──╲────╱──╲──╱──╲──╱──╲──────  │
-│  ─────────│                                                                 │
-│  Durée     │  Off-heap (Mo)              ── direct buffers  ·· metaspace     │
-│  5 min 12 s│  512 ┤        ▂▂▂▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄   │
-│  Samples   │    0 ┼──────────────────────────────────────────────────────    │
-│  1 204 511 │                                                                 │
-│  Threads   │  Pauses GC (ms)             │ = une pause (hauteur = durée)     │
-│  87        │  120 ┤                              │                           │
+│  Recording │    8 ┤···························································│
+│  ─────────│    4 ┤  ╱╲    ╱╲    ╱╲    ╱╲     ╱╲      ╱╲    ╱╲    ╱╲         │
+│  Durée     │    0 ┼─╱──╲──╱──╲──╱──╲──╱──╲───╱──╲────╱──╲──╱──╲──╱──╲──────  │
+│  5 min 12 s│                                                                 │
+│  Samples   │  Mémoire process (Go)       ── RSS : heap + off-heap + natif    │
+│  1 204 511 │   12 ┤      ▂▂▄▄▆▆▆▆▆▆████████████████▆▆▆▆▆▆▆▆████████▆▆▆▆▆▆   │
+│  Threads   │    0 ┼──────────────────────────────────────────────────────    │
+│  87        │                                                                 │
+│            │  Pauses GC (ms)             │ = une pause (hauteur = durée)     │
 │            │   60 ┤   │    │    │   ││   │  │    │    │   │    │      │      │
 │            │    0 ┼───┴────┴────┴───┴┴───┴──┴────┴────┴───┴────┴──────┴───   │
 │            │      0:00      1:00      2:00      3:00      4:00      5:00     │
@@ -110,9 +112,22 @@ Comportement :
 - Un brush (glisser horizontal) sur n'importe quel graphe propose « Analyser
   cette période » → ouvre une vue spécialisée avec la période pré-remplie
   dans la sélection courante.
-- Le panneau « Infos clés » vient des événements de métadonnées du JFR
-  (version JVM, flags, algo GC, taille heap, OS, CPU, hostname). Les champs
-  absents du recording sont affichés « n/d ».
+- Le panneau « Infos clés » vient des événements de métadonnées du JFR :
+  nom et version de la JVM (sans les flags — la liste complète des flags et
+  arguments ira dans une vue dédiée, hors périmètre de cette refonte), algo
+  GC, OS/CPU/hostname. Les champs absents du recording sont affichés « n/d ».
+- La ligne « Options » remonte trois réglages précis, extraits des
+  événements de flags JVM :
+  - `Xmx` **et** `Xms` : les deux valeurs, si elles sont indiquées (l'origine
+    du flag — ligne de commande, ergonomique, défaut — est disponible dans
+    le JFR ; on affiche la valeur avec un marqueur « défaut » si elle n'a
+    pas été passée explicitement) ;
+  - `MaxDirectMemorySize` : la valeur qui plafonne l'off-heap direct ;
+  - `DebugNonSafepoints` : booléen, ✓ activé / ✗ désactivé, visible d'un
+    coup d'œil.
+- Le graphe « Mémoire process » montre la consommation mémoire totale du
+  process (RSS) : heap + off-heap + natif JVM, ce qui remplace un graphe
+  off-heap dédié.
 
 ### 2.3 Vue spécialisée (exemple : Top methods)
 
@@ -198,11 +213,12 @@ d'infos demandent d'ingérer de nouveaux événements JFR :
 |---|---|
 | CPU | `jdk.CPULoad` (user/system/machine) |
 | Heap | `jdk.GCHeapSummary` (used/committed), `jdk.GCConfiguration` (max) |
-| Off-heap | `jdk.MetaspaceSummary`, `jdk.DirectBufferStatistics` (JDK 17+), à défaut `jdk.NativeMemoryUsage` si NMT actif |
+| Mémoire process (RSS) | `jdk.ResidentSetSize` (JDK 21+) ; à défaut `jdk.NativeMemoryUsageTotal` (JDK 20+, NMT actif) ; sinon graphe marqué « données absentes » |
 | Pauses GC | `jdk.GarbageCollection` (durée, cause) ou `jdk.GCPhasePause` |
-| Infos JVM | `jdk.JVMInformation` (version, flags), `jdk.InitialSystemProperty` |
+| Infos JVM | `jdk.JVMInformation` (nom, version), `jdk.InitialSystemProperty` |
 | Infos GC | `jdk.GCConfiguration`, `jdk.GCHeapConfiguration` |
 | Infos OS | `jdk.OSInformation`, `jdk.CPUInformation`, `jdk.PhysicalMemory` |
+| Options (Xmx/Xms, MaxDirectMemorySize, DebugNonSafepoints) | `jdk.ULongFlag` / `jdk.BooleanFlag` (une occurrence par flag, avec valeur et origine : ligne de commande, ergonomique ou défaut) |
 
 Chaque série est facultative : un recording async-profiler n'aura souvent
 que les samples → la vue d'ensemble affiche « données absentes de ce
@@ -281,4 +297,7 @@ U4 (données Rust) ─────────────────┴──�
 U4 est parallélisable avec U2/U3 (Rust pur vs UI pure). Les vues
 spécialisées futures (flamegraph J4, heatmap J6, appels fusionnés J7 du plan
 d'origine) s'insèrent dans le gabarit U2 sans travail supplémentaire de
-sélection.
+sélection. Une vue « JVM : flags & arguments » (liste complète depuis
+`jdk.JVMInformation` et les événements `jdk.*Flag`) viendra plus tard dans
+le même gabarit — le bandeau de la vue d'ensemble n'en montre que l'extrait
+« Options ».
