@@ -1,0 +1,353 @@
+-- allium: 3
+-- katan-alysis.allium
+--
+-- Scope: the JFR analysis desktop application — opening a recording,
+-- narrowing it with the cross-cutting filters, and reading the flat
+-- profile ("top methods") view.
+--
+-- Includes:
+--   - the outcome of opening a recording (loaded summary vs. error)
+--   - the normalised profile: frames, stacks, threads, samples
+--   - the thread and time filters, applied before any aggregation
+--   - the top-methods aggregation (self / total sample counts)
+--   - the two boundaries the analyst interacts with
+-- Excludes:
+--   - the JFR binary format and its parsing (jfrs library, external)
+--   - transport (Tauri IPC), rendering technology and packaging
+--   - views not yet built: flamegraph, heatmap, merged call tree
+--   - several recordings open at once. It is a decided direction, not
+--     an open question: the workspace will hold more than one profile
+--     so recordings can be compared. Until that work starts the spec
+--     describes the one-recording workspace that exists (docs/PLAN.md).
+
+------------------------------------------------------------
+-- Given
+------------------------------------------------------------
+
+given {
+    workspace: AnalysisWorkspace
+}
+
+------------------------------------------------------------
+-- External Entities
+------------------------------------------------------------
+
+-- A JFR file on disk. Produced by a JVM or by async-profiler; the
+-- application only ever reads it.
+external entity Recording {
+    path: String
+}
+
+-- The person driving the application. The system holds no account or
+-- identity of its own; the analyst is whoever operates the workspace.
+external entity Analyst {
+    name: String
+}
+
+------------------------------------------------------------
+-- Value Types
+------------------------------------------------------------
+
+-- An interval of recording-relative nanoseconds, both bounds included:
+-- the analyst who selects the whole span keeps every sample, last one
+-- included. A window whose end precedes its start holds no instant and
+-- is therefore empty — it narrows nothing.
+value TimeWindow {
+    start_nanos: Integer
+    end_nanos: Integer
+
+    duration_nanos: end_nanos - start_nanos
+    is_empty: end_nanos < start_nanos
+}
+
+------------------------------------------------------------
+-- Entities and Variants
+------------------------------------------------------------
+
+-- A method, identified independently of where it appears in a stack.
+-- Two occurrences of the same method are the same frame.
+entity Frame {
+    profile: Profile
+    class_name: String
+    method_name: String
+
+    -- Samples whose innermost frame is this method: it was the one
+    -- running on CPU.
+    leaf_samples: Sample with leaf_frame = this
+    -- Samples that have this method anywhere in their stack. Counted
+    -- once per sample, even when the stack recurses through it.
+    covering_samples: Sample with this in distinct_frames
+
+    -- Both counts are relative to the current selection: filters are
+    -- applied to the sample stream before anything is aggregated.
+    selected_leaf_samples: leaf_samples where is_selected
+    selected_covering_samples: covering_samples where is_selected
+
+    self_samples: selected_leaf_samples.count
+    total_samples: selected_covering_samples.count
+
+    is_visible: total_samples > 0
+}
+
+-- One call stack, root first and leaf last. Stacks are shared: many
+-- samples point at the same stack.
+entity Stack {
+    profile: Profile
+    frames: List<Frame>
+
+    leaf: frames.last
+    distinct_frames: frames.unique
+}
+
+-- A thread observed in the recording.
+entity ProfiledThread {
+    profile: Profile
+    name: String
+}
+
+-- One execution sample: an instant, a thread, and the stack that
+-- thread was running.
+entity Sample {
+    profile: Profile
+    ts_nanos: Integer
+    thread: ProfiledThread
+    stack: Stack
+
+    leaf_frame: stack.leaf
+    distinct_frames: stack.distinct_frames
+
+    -- The filters are cross-cutting: every view sees the same selected
+    -- samples, so no view may re-filter or post-process aggregated data.
+    matches_thread_filter:
+        workspace.selected_threads = null
+        or thread in workspace.selected_threads
+    matches_time_filter:
+        workspace.selected_window = null
+        or (ts_nanos >= workspace.selected_window.start_nanos
+            and ts_nanos <= workspace.selected_window.end_nanos)
+    is_selected: matches_thread_filter and matches_time_filter
+}
+
+-- A recording turned into the shape every view consumes. Produced once
+-- when the recording is opened, then only queried.
+entity Profile {
+    source: Recording
+
+    frames: Frame with profile = this
+    stacks: Stack with profile = this
+    threads: ProfiledThread with profile = this
+    samples: Sample with profile = this
+
+    sample_count: samples.count
+    first_sample_nanos: earliest(samples)
+    last_sample_nanos: latest(samples)
+    -- The span the analyst can select within; timestamps shown to the
+    -- analyst are relative to the first sample, never absolute.
+    duration_nanos: last_sample_nanos - first_sample_nanos
+}
+
+-- The application state: at most one recording open, plus the filters
+-- currently narrowing it.
+entity AnalysisWorkspace {
+    -- Absent until a recording has been opened successfully.
+    profile: Profile?
+    -- Absent means "every thread" / "the whole recording". An empty
+    -- filter is not a filter: selecting no thread, or a window holding
+    -- no instant, narrows nothing rather than emptying the views. The
+    -- analyst who deselects everything is not asking to see nothing,
+    -- and each category is independent — an empty thread selection
+    -- leaves an active time window alone.
+    selected_threads: Set<ProfiledThread>?
+    selected_window: TimeWindow?
+    -- Why the last attempt to open a recording failed, if it did.
+    last_error: String?
+
+    has_recording: profile != null
+    selected_samples: profile.samples where is_selected
+    -- The denominator of every percentage the analyst reads.
+    selection_size: selected_samples.count
+    top_methods: profile.frames where is_visible
+
+    invariant FiltersRequireARecording {
+        not has_recording
+            implies selected_threads = null and selected_window = null
+    }
+
+    -- Empty filters are normalised away as they are selected, so no
+    -- view has to decide what an empty filter means.
+    invariant NoEmptyFilterIsEverHeld {
+        (selected_threads = null or selected_threads.count > 0)
+            and (selected_window = null or not selected_window.is_empty)
+    }
+}
+
+------------------------------------------------------------
+-- Rules
+------------------------------------------------------------
+
+rule LoadRecording {
+    when: AnalystOpensRecording(analyst, recording)
+    requires: is_readable(recording)
+    requires: has_execution_samples(recording)
+    ensures:
+        workspace.profile = Profile.created(source: recording)
+        -- A new recording starts unfiltered: filters from the previous
+        -- one would silently narrow a different data set.
+        workspace.selected_threads = null
+        workspace.selected_window = null
+        workspace.last_error = null
+    @guidance
+        -- Samples with no resolvable stack or thread contribute to no
+        -- view and are dropped while reading; a recording made only of
+        -- such samples is an unusable recording.
+}
+
+rule RejectUnusableRecording {
+    when: AnalystOpensRecording(analyst, recording)
+    requires: not is_readable(recording) or not has_execution_samples(recording)
+    ensures:
+        -- The workspace keeps whatever was already open: a failed open
+        -- never costs the analyst the recording they were reading.
+        workspace.last_error = failure_reason(recording)
+}
+
+rule NarrowToThreads {
+    when: AnalystSelectsThreads(analyst, threads)
+    requires: workspace.has_recording
+    ensures:
+        if threads.count = 0:
+            workspace.selected_threads = null
+        else:
+            workspace.selected_threads = threads
+}
+
+rule WidenToAllThreads {
+    when: AnalystClearsThreadSelection(analyst)
+    requires: workspace.selected_threads != null
+    ensures: workspace.selected_threads = null
+}
+
+rule NarrowToTimeWindow {
+    when: AnalystSelectsTimeWindow(analyst, window)
+    requires: workspace.has_recording
+    ensures:
+        -- A brush that selects no instant clears the time filter; it is
+        -- how the analyst backs out of a selection, not a rejected
+        -- action.
+        if window.is_empty:
+            workspace.selected_window = null
+        else:
+            workspace.selected_window = window
+}
+
+rule WidenToWholeRecording {
+    when: AnalystClearsTimeWindow(analyst)
+    requires: workspace.selected_window != null
+    ensures: workspace.selected_window = null
+}
+
+------------------------------------------------------------
+-- Invariants
+------------------------------------------------------------
+
+-- A method cannot be on CPU in a sample it does not appear in.
+invariant SelfNeverExceedsTotal {
+    for frame in Frames:
+        frame.self_samples <= frame.total_samples
+}
+
+-- No method can cover more samples than the selection holds.
+invariant TotalBoundedBySelection {
+    for frame in Frames:
+        frame.total_samples <= workspace.selection_size
+}
+
+-- Exactly one method is on CPU per sample, so the self counts of a
+-- profile partition its selection.
+invariant SelfCountsPartitionTheSelection {
+    sum_of(Frames, f => f.self_samples) = workspace.selection_size
+}
+
+-- Every sample belongs to the recording it was read from, and so does
+-- every stack it points at.
+invariant SamplesAreInternallyConsistent {
+    for sample in Samples:
+        sample.stack.profile = sample.profile
+            and sample.thread.profile = sample.profile
+}
+
+------------------------------------------------------------
+-- Surfaces
+------------------------------------------------------------
+
+surface RecordingLoader {
+    facing analyst: Analyst
+
+    exposes:
+        workspace.has_recording
+        workspace.last_error
+        workspace.profile.sample_count
+        workspace.profile.duration_nanos
+        workspace.profile.threads.name
+
+    provides:
+        AnalystOpensRecording(analyst, recording)
+
+    @guarantee FailedOpenIsReported
+        -- Opening a recording either yields a summary or a message
+        -- naming what went wrong. It never fails silently, and never
+        -- leaves the analyst looking at a half-loaded recording.
+
+    related:
+        TopMethodsView() when workspace.has_recording
+}
+
+surface TopMethodsView {
+    facing analyst: Analyst
+
+    exposes:
+        workspace.selection_size
+        for frame in workspace.top_methods:
+            frame.class_name
+            frame.method_name
+            frame.self_samples
+            frame.total_samples
+
+    provides:
+        AnalystSelectsThreads(analyst, threads)
+            when workspace.has_recording
+        AnalystClearsThreadSelection(analyst)
+            when workspace.selected_threads != null
+        AnalystSelectsTimeWindow(analyst, window)
+            when workspace.has_recording
+        AnalystClearsTimeWindow(analyst)
+            when workspace.selected_window != null
+
+    @guarantee RowsAreOrderedBySelfTime
+        -- Rows are ordered by decreasing self count, and that order is
+        -- total: two runs over the same selection produce the same
+        -- sequence of rows.
+
+    @guarantee PercentagesShareOneDenominator
+        -- Self and total percentages are read against the size of the
+        -- current selection, not against the whole recording.
+
+    @guarantee EmptyingAFilterWidensTheTable
+        -- Emptying a filter never shrinks the table: deselecting every
+        -- thread, or brushing a window that holds no instant, widens
+        -- the selection back to the whole recording. A table can still
+        -- come out empty, but only from a selection that genuinely
+        -- matches no sample — a thread that was idle throughout the
+        -- selected window, say.
+
+    @guidance
+        -- The analyst reads this table to find where time goes: a high
+        -- self count means the method itself is hot, a high total with
+        -- a low self means it is the entry point of something hot.
+}
+
+------------------------------------------------------------
+-- Open Questions
+------------------------------------------------------------
+
+open question "When several recordings are open at once, is a filter selection per recording or shared across them?"

@@ -1,6 +1,29 @@
 version: 2.1
 
 jobs:
+  # Behavioural specification: structural check plus process analysis.
+  # The spec is the primary artefact, so it is gated like the code. The
+  # checker is pinned and cached as a binary — building it from source
+  # takes longer than running it.
+  spec-check:
+    docker:
+      - image: cimg/rust:1.94
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - allium-cli-v1-3.5.3
+      - run:
+          name: Install the Allium checker
+          command: command -v allium || cargo install allium-cli --version 3.5.3
+      - save_cache:
+          key: allium-cli-v1-3.5.3
+          paths:
+            - ~/.cargo/bin/allium
+      - run:
+          name: Check the specs (errors and process findings are fatal)
+          command: ./scripts/check-specs.sh
+
   # Data crates: format, lints, tests under coverage. No system dependencies
   # needed. The build fails when line coverage drops below 80%.
   rust-test:
@@ -149,6 +172,7 @@ jobs:
 workflows:
   ci:
     jobs:
+      - spec-check
       - rust-test
       - tauri-check
       - ui-test

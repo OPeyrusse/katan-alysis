@@ -2,9 +2,10 @@
 
 Proto application to analyze JFRs with more views.
 
-See [docs/PLAN.md](docs/PLAN.md) for the action plan and
+See [docs/PLAN.md](docs/PLAN.md) for the action plan,
 [docs/JFR-viewer-bootstrap.md](docs/JFR-viewer-bootstrap.md) for the original
-brief.
+brief, and [specs/katan-alysis.allium](specs/katan-alysis.allium) for the
+behavioural specification.
 
 ## Layout
 
@@ -13,7 +14,28 @@ crates/jfr-model/   shared data model (samples, frame dictionary, view models)
 crates/...          ingestion (jfrs) and aggregation crates
 app/src-tauri/      Tauri shell (thin IPC commands, standalone Cargo workspace)
 app/ui/             SolidJS + Vite frontend, canvas rendering
+specs/              Allium behavioural specification
 ```
+
+## Specification
+
+`specs/katan-alysis.allium` describes what the application does — entities,
+rules and boundary contracts — without prescribing how it is built. It is
+maintained alongside the code: any change to observable behaviour updates the
+spec in the same commit.
+
+The [Allium](https://juxt.github.io/allium) checker validates it, and CI gates
+on it (job `spec-check`):
+
+```
+cargo install allium-cli
+./scripts/check-specs.sh   # structural check + process analysis, as in CI
+allium check specs/        # structural diagnostics only
+```
+
+Agents working in this repo get the Allium skills from `.claude/skills`
+(`/allium`, `/elicit`, `/distill`, `/propagate`, `/tend`, `/weed`) and a
+`PostToolUse` hook that runs `allium check` on every `.allium` edit.
 
 ## Development
 

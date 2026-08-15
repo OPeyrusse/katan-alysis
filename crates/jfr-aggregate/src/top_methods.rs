@@ -181,14 +181,36 @@ mod tests {
     }
 
     #[test]
-    fn empty_selection_yields_empty_view() {
-        let profile = profile(1, &[&[0]], &[(1, 0, 0)]);
+    fn an_empty_filter_widens_instead_of_emptying_the_view() {
+        let profile = profile(3, &[&[0, 1], &[0, 2]], &[(1, 0, 0), (2, 1, 1)]);
+        let unfiltered = top_methods(&profile, &Filters::default());
+
+        for filters in [
+            Filters {
+                threads: Some(vec![]),
+                ..Filters::default()
+            },
+            Filters {
+                time_range_nanos: Some((5, 5)),
+                ..Filters::default()
+            },
+        ] {
+            let view = top_methods(&profile, &filters);
+            assert_eq!(view, unfiltered, "filters {filters:?}");
+        }
+    }
+
+    #[test]
+    fn an_empty_thread_selection_keeps_the_time_filter() {
+        let profile = profile(2, &[&[0], &[1]], &[(10, 0, 0), (20, 1, 1)]);
         let filters = Filters {
             threads: Some(vec![]),
-            ..Filters::default()
+            time_range_nanos: Some((15, 25)),
         };
         let view = top_methods(&profile, &filters);
-        assert_eq!(view.total_samples, 0);
-        assert!(view.rows.is_empty());
+
+        assert_eq!(view.total_samples, 1);
+        assert_eq!(stats_of(&view, 1).self_samples, 1);
+        assert_eq!(stats_of(&view, 0).total_samples, 0);
     }
 }

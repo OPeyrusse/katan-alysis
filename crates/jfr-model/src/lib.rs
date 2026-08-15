@@ -80,23 +80,32 @@ impl Profile {
     }
 }
 
-/// Cross-cutting filters, applied before any aggregation. `None` = no filter.
+/// Cross-cutting filters, applied before any aggregation.
+///
+/// An empty filter is not a filter: `None`, an empty thread list and an
+/// empty time range all mean "keep everything" for that category. The
+/// analyst who deselects every thread is not asking to see nothing, and
+/// the two categories stay independent — an empty thread selection leaves
+/// an active time range alone.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Filters {
-    /// Keep only samples from these threads.
+    /// Keep only samples from these threads; empty means every thread.
     pub threads: Option<Vec<ThreadId>>,
-    /// Keep only samples with `start <= ts_nanos < end`.
+    /// Keep only samples with `start <= ts_nanos < end`; a range holding
+    /// no instant (`end <= start`) means the whole recording.
     pub time_range_nanos: Option<(i64, i64)>,
 }
 
 impl Filters {
     pub fn accepts(&self, sample: &Sample) -> bool {
         if let Some(threads) = &self.threads
+            && !threads.is_empty()
             && !threads.contains(&sample.thread)
         {
             return false;
         }
         if let Some((start, end)) = self.time_range_nanos
+            && start < end
             && (sample.ts_nanos < start || sample.ts_nanos >= end)
         {
             return false;
@@ -180,6 +189,48 @@ mod tests {
         };
         assert!(filters.accepts(&sample(0, 1, 0)));
         assert!(filters.accepts(&sample(0, 3, 0)));
+        assert!(!filters.accepts(&sample(0, 2, 0)));
+    }
+
+    #[test]
+    fn an_empty_thread_list_filters_nothing() {
+        let filters = Filters {
+            threads: Some(vec![]),
+            ..Filters::default()
+        };
+        assert!(filters.accepts(&sample(0, 1, 0)));
+        assert!(filters.accepts(&sample(0, 2, 0)));
+    }
+
+    #[test]
+    fn an_empty_thread_list_leaves_the_time_filter_alone() {
+        let filters = Filters {
+            threads: Some(vec![]),
+            time_range_nanos: Some((10, 20)),
+        };
+        assert!(filters.accepts(&sample(15, 7, 0)));
+        assert!(!filters.accepts(&sample(25, 7, 0)));
+    }
+
+    #[test]
+    fn an_empty_time_range_filters_nothing() {
+        for range in [(10, 10), (20, 10)] {
+            let filters = Filters {
+                time_range_nanos: Some(range),
+                ..Filters::default()
+            };
+            assert!(filters.accepts(&sample(0, 0, 0)), "range {range:?}");
+            assert!(filters.accepts(&sample(15, 0, 0)), "range {range:?}");
+        }
+    }
+
+    #[test]
+    fn an_empty_time_range_leaves_the_thread_filter_alone() {
+        let filters = Filters {
+            threads: Some(vec![ThreadId(1)]),
+            time_range_nanos: Some((20, 10)),
+        };
+        assert!(filters.accepts(&sample(0, 1, 0)));
         assert!(!filters.accepts(&sample(0, 2, 0)));
     }
 
