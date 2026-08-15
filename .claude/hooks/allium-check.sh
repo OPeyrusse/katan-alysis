@@ -8,6 +8,10 @@
 # governing spec, or a field only referenced from a predicate, is a
 # normal state for this spec.
 #
+# Deliberately lighter than scripts/check-specs.sh, the gate CI runs:
+# this fires after every single write, and a spec mid-edit should not be
+# blocked on process findings that the next write resolves.
+#
 # Install the checker with `cargo install allium-cli`. Without it the
 # hook is a no-op.
 

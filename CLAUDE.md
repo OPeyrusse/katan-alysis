@@ -27,7 +27,7 @@ pnpm -C app/ui test                                 # vitest
 pnpm -C app/ui typecheck
 pnpm -C app/ui lint
 pnpm tauri dev                                      # run the desktop app
-allium check specs/                                 # validate the spec
+./scripts/check-specs.sh                            # validate the spec (same gate as CI)
 ```
 
 ## Architecture rules
@@ -62,10 +62,11 @@ implementation detail. It is the primary artefact — the code implements it.
 - Refactors, performance work and anything invisible to the analyst leave the
   spec untouched. If a change does not alter observable behaviour, it does not
   belong in the spec.
-- Run `allium check specs/` after editing. Zero errors is the bar; the
-  remaining warnings (external entities without a governing spec) and info
-  diagnostics are expected. `allium analyse specs/` additionally reports
-  process-level findings.
+- Run `./scripts/check-specs.sh` after editing. It runs `allium analyse` and
+  fails on errors and on process-level findings; the remaining warnings
+  (external entities without a governing spec) and info diagnostics are
+  expected. CI runs the same script in the `spec-check` job, so a spec that
+  does not check does not merge.
 - Open design questions go in the `open question` section of the spec rather
   than in a comment in the code.
 

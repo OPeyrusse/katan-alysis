@@ -24,12 +24,13 @@ rules and boundary contracts — without prescribing how it is built. It is
 maintained alongside the code: any change to observable behaviour updates the
 spec in the same commit.
 
-The [Allium](https://juxt.github.io/allium) checker validates it:
+The [Allium](https://juxt.github.io/allium) checker validates it, and CI gates
+on it (job `spec-check`):
 
 ```
 cargo install allium-cli
-allium check specs/      # structural diagnostics
-allium analyse specs/    # + data flow, reachability, conflicts
+./scripts/check-specs.sh   # structural check + process analysis, as in CI
+allium check specs/        # structural diagnostics only
 ```
 
 Agents working in this repo get the Allium skills from `.claude/skills`
