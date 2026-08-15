@@ -1,0 +1,11 @@
+{
+  "name": "katan-alysis",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.0"
+  }
+}

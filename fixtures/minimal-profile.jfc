@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Minimal JFR settings for test fixtures: execution samples only.
+  Deliberately excludes environment/system events (initial environment
+  variables, system properties, process lists...) so recordings stay free
+  of secrets and machine-specific data.
+-->
+<configuration version="2.0" label="Fixture minimal" description="Execution samples only">
+  <event name="jdk.ExecutionSample">
+    <setting name="enabled">true</setting>
+    <setting name="period">10 ms</setting>
+  </event>
+</configuration>
