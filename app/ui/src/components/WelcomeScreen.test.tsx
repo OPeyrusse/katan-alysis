@@ -5,6 +5,7 @@ import { WelcomeScreen } from './WelcomeScreen';
 import { createProfileStore } from '../state/profile';
 import type { Shell } from '../api/shell';
 import type { ProfileSummary, RecentRecording } from '../api/client';
+import { emptySignals, nullInfo } from '../test/fixtures';
 
 const summary: ProfileSummary = {
   sample_count: 10,
@@ -25,6 +26,8 @@ function mockedClient() {
     closeRecording: vi.fn().mockResolvedValue(undefined),
     getTopMethods: vi.fn().mockResolvedValue({ rows: [], total_samples: 10 }),
     getSampleDensity: vi.fn().mockResolvedValue({ bucket_nanos: 1, counts: [] }),
+    getRecordingInfo: vi.fn().mockResolvedValue(nullInfo()),
+    getOverviewSignals: vi.fn().mockResolvedValue(emptySignals()),
     listRecentRecordings: vi.fn().mockResolvedValue(recents),
     removeRecentRecording: vi.fn().mockResolvedValue([recents[1]]),
     clearRecentRecordings: vi.fn().mockResolvedValue([]),

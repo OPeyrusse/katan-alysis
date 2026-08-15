@@ -56,6 +56,61 @@ export interface RecentRecording {
   last_opened_ms: number;
 }
 
+// A JVM flag captured at recording start, with where its value came from
+// ('Command line', 'Ergonomic', 'Default', ...).
+export interface UnsignedFlag {
+  value: number;
+  origin: string;
+}
+
+export interface BooleanFlag {
+  value: boolean;
+  origin: string;
+}
+
+// What the recording says about the JVM that produced it; every field may
+// be null — async-profiler recordings carry no metadata at all.
+export interface RecordingInfo {
+  jvm_name: string | null;
+  jvm_version: string | null;
+  young_collector: string | null;
+  old_collector: string | null;
+  heap_max_bytes: number | null;
+  os_version: string | null;
+  cpu_cores: number | null;
+  hw_threads: number | null;
+  physical_memory_bytes: number | null;
+  xmx: UnsignedFlag | null;
+  xms: UnsignedFlag | null;
+  max_direct_memory: UnsignedFlag | null;
+  debug_non_safepoints: BooleanFlag | null;
+}
+
+// One point of a sampled signal; timestamps are recording-relative nanos.
+export interface TimePoint {
+  ts_nanos: number;
+  value: number;
+}
+
+export interface GcPause {
+  ts_nanos: number;
+  duration_nanos: number;
+  name: string;
+  cause: string;
+}
+
+// The overview signals, downsampled server-side; empty arrays when the
+// recording does not carry the corresponding events.
+export interface OverviewSignals {
+  cpu_jvm_user: TimePoint[];
+  cpu_jvm_system: TimePoint[];
+  cpu_machine_total: TimePoint[];
+  heap_used_bytes: TimePoint[];
+  heap_committed_bytes: TimePoint[];
+  rss_bytes: TimePoint[];
+  gc_pauses: GcPause[];
+}
+
 export function openRecording(path: string): Promise<ProfileSummary> {
   return invoke('open_recording', { path });
 }
@@ -70,6 +125,14 @@ export function getTopMethods(filters: RelativeFilters): Promise<TopMethods> {
 
 export function getSampleDensity(buckets: number): Promise<SampleDensity> {
   return invoke('get_sample_density', { buckets });
+}
+
+export function getRecordingInfo(): Promise<RecordingInfo> {
+  return invoke('get_recording_info');
+}
+
+export function getOverviewSignals(maxPoints: number): Promise<OverviewSignals> {
+  return invoke('get_overview_signals', { maxPoints });
 }
 
 export function listRecentRecordings(): Promise<RecentRecording[]> {

@@ -11,9 +11,11 @@
 --   - the recent-recordings list: remembered opens, persisted across
 --     application restarts
 --   - the normalised profile: frames, stacks, threads, samples
+--   - the recording's own description (JVM, GC, host, key flags) and
+--     the overview that presents it with the recorded signals
 --   - the thread and time filters, applied before any aggregation
 --   - the top-methods aggregation (self / total sample counts)
---   - the two boundaries the analyst interacts with
+--   - the boundaries the analyst interacts with
 -- Excludes:
 --   - the JFR binary format and its parsing (jfrs library, external)
 --   - transport (Tauri IPC), rendering technology and packaging
@@ -77,6 +79,20 @@ value SavedSelection {
     name: String
     threads: Set<ProfiledThread>?
     window: TimeWindow?
+}
+
+-- A JVM flag captured at recording start: its value and where it came
+-- from ("Command line", "Ergonomic", "Default"...). The origin is what
+-- lets the analyst tell an explicit -Xmx from an ergonomic one.
+value JvmFlag {
+    value: Integer
+    origin: String
+}
+
+-- Boolean twin of JvmFlag, for on/off diagnostics flags.
+value ToggleFlag {
+    enabled: Boolean
+    origin: String
 }
 
 ------------------------------------------------------------
@@ -162,6 +178,23 @@ entity Profile {
     stacks: Stack with profile = this
     threads: ProfiledThread with profile = this
     samples: Sample with profile = this
+
+    -- What the recording says about the JVM that produced it. Every
+    -- field may be absent — an async-profiler recording, or one made
+    -- with minimal settings, carries no metadata events at all — and
+    -- absence reads as "n/a", never as an error.
+    jvm_name: String?
+    jvm_version: String?
+    young_collector: String?
+    old_collector: String?
+    heap_max_bytes: Integer?
+    os_description: String?
+    cpu_cores: Integer?
+    physical_memory_bytes: Integer?
+    xmx: JvmFlag?
+    xms: JvmFlag?
+    max_direct_memory: JvmFlag?
+    debug_non_safepoints: ToggleFlag?
 
     sample_count: samples.count
     first_sample_nanos: earliest(samples)
@@ -460,6 +493,50 @@ surface RecordingLoader {
         -- the process: quitting and relaunching the application shows
         -- the same recents. Everything else — the loaded recording, the
         -- filters — starts fresh.
+
+    related:
+        RecordingOverview() when workspace.has_recording
+        TopMethodsView() when workspace.has_recording
+}
+
+-- The landing view of a freshly opened recording: what the recording
+-- says about itself, and its vital signs over time.
+surface RecordingOverview {
+    facing analyst: Analyst
+
+    exposes:
+        workspace.profile.jvm_name
+        workspace.profile.jvm_version
+        workspace.profile.young_collector
+        workspace.profile.old_collector
+        workspace.profile.heap_max_bytes
+        workspace.profile.os_description
+        workspace.profile.cpu_cores
+        workspace.profile.physical_memory_bytes
+        workspace.profile.xmx
+        workspace.profile.xms
+        workspace.profile.max_direct_memory
+        workspace.profile.debug_non_safepoints
+
+    provides:
+        -- Brushing a period on any chart is the "analyze this period"
+        -- gesture: it narrows the time window and hands over to the
+        -- top-methods view.
+        AnalystSelectsTimeWindow(analyst, window)
+            when workspace.has_recording
+
+    @guarantee ChartsShareTheRecordingClock
+        -- The overview draws four signals — CPU load, heap occupancy,
+        -- process memory (RSS), GC pauses — as recorded, over one
+        -- shared time axis spanning the whole recording. The hover
+        -- cursor is one cursor: pointing at an instant points at it in
+        -- all four charts.
+
+    @guarantee MissingDataIsNamed
+        -- A signal the recording does not carry shows as "not in this
+        -- recording", and an absent fact as "n/a" — never an empty
+        -- chart the analyst could mistake for a flat line, never an
+        -- error for a recording that is merely minimal.
 
     related:
         TopMethodsView() when workspace.has_recording

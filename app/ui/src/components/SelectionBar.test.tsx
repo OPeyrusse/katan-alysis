@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { SelectionBar } from './SelectionBar';
 import { createProfileStore } from '../state/profile';
 import type { ProfileSummary } from '../api/client';
+import { emptySignals, nullInfo } from '../test/fixtures';
 
 const summary: ProfileSummary = {
   sample_count: 100,
@@ -22,6 +23,8 @@ function mockedClient() {
     closeRecording: vi.fn().mockResolvedValue(undefined),
     getTopMethods: vi.fn().mockResolvedValue({ rows: [], total_samples: 100 }),
     getSampleDensity: vi.fn().mockResolvedValue({ bucket_nanos: 1, counts: [1] }),
+    getRecordingInfo: vi.fn().mockResolvedValue(nullInfo()),
+    getOverviewSignals: vi.fn().mockResolvedValue(emptySignals()),
     listRecentRecordings: vi.fn().mockResolvedValue([]),
     removeRecentRecording: vi.fn().mockResolvedValue([]),
     clearRecentRecordings: vi.fn().mockResolvedValue([]),

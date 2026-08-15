@@ -5,6 +5,7 @@ import { App } from './App';
 import { createProfileStore } from './state/profile';
 import type { Shell } from './api/shell';
 import type { ProfileSummary, TopMethods } from './api/client';
+import { emptySignals, nullInfo } from './test/fixtures';
 
 const summary: ProfileSummary = {
   sample_count: 504,
@@ -34,6 +35,8 @@ function mockedClient() {
     closeRecording: vi.fn().mockResolvedValue(undefined),
     getTopMethods: vi.fn().mockResolvedValue(topMethods),
     getSampleDensity: vi.fn().mockResolvedValue({ bucket_nanos: 1, counts: [1, 2, 1] }),
+    getRecordingInfo: vi.fn().mockResolvedValue(nullInfo()),
+    getOverviewSignals: vi.fn().mockResolvedValue(emptySignals()),
     listRecentRecordings: vi.fn().mockResolvedValue([]),
     removeRecentRecording: vi.fn().mockResolvedValue([]),
     clearRecentRecordings: vi.fn().mockResolvedValue([]),
@@ -54,8 +57,18 @@ async function openedApp() {
   render(() => <App store={store} shell={shell} />);
   await userEvent.type(screen.getByLabelText(/Open by path/), '/tmp/rec.jfr');
   await userEvent.click(screen.getByRole('button', { name: 'Open' }));
-  await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+  // A fresh recording lands on the overview.
+  await waitFor(() =>
+    expect(screen.getByRole('region', { name: 'Overview view' })).toBeInTheDocument(),
+  );
   return { client, store, shell };
+}
+
+async function openedTopMethods() {
+  const opened = await openedApp();
+  await userEvent.click(screen.getByRole('button', { name: 'Top methods' }));
+  await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+  return opened;
 }
 
 describe('App', () => {
@@ -65,8 +78,8 @@ describe('App', () => {
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
-  it('opens a recording into the top-methods view', async () => {
-    const { client } = await openedApp();
+  it('opens a recording into the overview, then reaches top methods', async () => {
+    const { client } = await openedTopMethods();
 
     expect(client.openRecording).toHaveBeenCalledWith('/tmp/rec.jfr');
     expect(client.getTopMethods).toHaveBeenCalledWith({});
@@ -80,11 +93,10 @@ describe('App', () => {
   });
 
   it('navigates between the built views and disables the future ones', async () => {
-    await openedApp();
+    await openedTopMethods();
 
-    const overview = screen.getByRole('button', { name: 'Overview' });
-    await userEvent.click(overview);
-    expect(screen.getByText('The overview charts are not built yet.')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Overview' }));
+    expect(screen.getByRole('region', { name: 'Overview view' })).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Top methods' }));
