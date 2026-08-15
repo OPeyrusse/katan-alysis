@@ -71,6 +71,14 @@ value RecentEntry {
     last_opened_ms: Integer
 }
 
+-- A selection the analyst saved under a name: the two filters, frozen.
+-- Null halves mean the same as on the workspace — not narrowed.
+value SavedSelection {
+    name: String
+    threads: Set<ProfiledThread>?
+    window: TimeWindow?
+}
+
 ------------------------------------------------------------
 -- Entities and Variants
 ------------------------------------------------------------
@@ -182,6 +190,9 @@ entity AnalysisWorkspace {
     -- succeeded, most recent first. Unlike the rest of the workspace
     -- this list survives an application restart.
     recent_recordings: List<RecentEntry>
+    -- Selections saved under a name for the current recording, in save
+    -- order. In memory only: they die with the recording session.
+    saved_selections: List<SavedSelection>
 
     has_recording: profile != null
     selected_samples: profile.samples where is_selected
@@ -192,6 +203,16 @@ entity AnalysisWorkspace {
     invariant FiltersRequireARecording {
         not has_recording
             implies selected_threads = null and selected_window = null
+    }
+
+    invariant SelectionsRequireARecording {
+        not has_recording implies saved_selections.count = 0
+    }
+
+    -- One name designates one saved selection; conflicts are resolved
+    -- with a numeric suffix as names are taken.
+    invariant SavedSelectionNamesAreUnique {
+        saved_selections.name.unique.count = saved_selections.count
     }
 
     -- Empty filters are normalised away as they are selected, so no
@@ -225,6 +246,9 @@ rule LoadRecording {
         workspace.selected_threads = null
         workspace.selected_window = null
         workspace.last_error = null
+        -- Saved selections named windows of the previous recording;
+        -- they would silently describe a different data set here.
+        workspace.saved_selections = []
         -- The open is remembered: the recording's entry moves to (or
         -- appears at) the front of the recents list, and the entry
         -- beyond the shortlist bound, if any, falls off the end.
@@ -250,11 +274,13 @@ rule CloseRecording {
     when: AnalystClosesRecording(analyst)
     requires: workspace.has_recording
     ensures:
-        -- Filters die with the recording they narrowed. The recents
-        -- list is untouched: closing is not forgetting.
+        -- Filters and saved selections die with the recording they
+        -- narrowed. The recents list is untouched: closing is not
+        -- forgetting.
         workspace.profile = null
         workspace.selected_threads = null
         workspace.selected_window = null
+        workspace.saved_selections = []
         workspace.last_error = null
 }
 
@@ -305,6 +331,59 @@ rule WidenToWholeRecording {
     when: AnalystClearsTimeWindow(analyst)
     requires: workspace.selected_window != null
     ensures: workspace.selected_window = null
+}
+
+rule SaveCurrentSelection {
+    when: AnalystSavesSelection(analyst)
+    -- Saving the absence of selection would duplicate the built-in
+    -- "no selection" entry, so there must be something to name.
+    requires: workspace.selected_threads != null
+        or workspace.selected_window != null
+    ensures:
+        -- The default name describes the selection — the period (or
+        -- "whole recording") and the thread count (or "all threads");
+        -- a name conflict takes the first free " (n)" suffix, n >= 2.
+        workspace.saved_selections = with_saved(
+            workspace.saved_selections,
+            workspace.selected_threads,
+            workspace.selected_window)
+}
+
+rule ApplySavedSelection {
+    when: AnalystAppliesSelection(analyst, selection)
+    requires: selection in workspace.saved_selections
+    ensures:
+        workspace.selected_threads = selection.threads
+        workspace.selected_window = selection.window
+}
+
+-- The "no selection" entry of the selection menu: every thread, the
+-- whole recording, in one gesture.
+rule ApplyNoSelection {
+    when: AnalystClearsSelection(analyst)
+    requires: workspace.has_recording
+    ensures:
+        workspace.selected_threads = null
+        workspace.selected_window = null
+}
+
+rule RenameSavedSelection {
+    when: AnalystRenamesSelection(analyst, selection, wanted)
+    requires: selection in workspace.saved_selections
+    ensures:
+        -- Same conflict rule as saving; a blank name changes nothing.
+        workspace.saved_selections = renamed(
+            workspace.saved_selections, selection, wanted)
+}
+
+rule DeleteSavedSelection {
+    when: AnalystDeletesSelection(analyst, selection)
+    requires: selection in workspace.saved_selections
+    ensures:
+        -- Deleting forgets the name, not the current selection: the
+        -- filters the entry may have produced stay in place.
+        workspace.saved_selections = without_selection(
+            workspace.saved_selections, selection)
 }
 
 ------------------------------------------------------------
@@ -393,12 +472,15 @@ surface TopMethodsView {
         workspace.selection_size
         -- The selection chrome, shared by every specialized view: the
         -- current selection summarised in one line, the thread panel,
-        -- and the timeline strip carrying the brush.
+        -- the timeline strip carrying the brush, and the menu of saved
+        -- selections.
         workspace.selected_threads
         workspace.selected_window
         for thread in workspace.profile.threads:
             thread.name
             thread.sample_count
+        for selection in workspace.saved_selections:
+            selection.name
         for frame in workspace.top_methods:
             frame.class_name
             frame.method_name
@@ -414,6 +496,17 @@ surface TopMethodsView {
             when workspace.has_recording
         AnalystClearsTimeWindow(analyst)
             when workspace.selected_window != null
+        AnalystSavesSelection(analyst)
+            when workspace.selected_threads != null
+                or workspace.selected_window != null
+        AnalystAppliesSelection(analyst, selection)
+            when workspace.saved_selections.count > 0
+        AnalystClearsSelection(analyst)
+            when workspace.has_recording
+        AnalystRenamesSelection(analyst, selection, wanted)
+            when workspace.saved_selections.count > 0
+        AnalystDeletesSelection(analyst, selection)
+            when workspace.saved_selections.count > 0
 
     @guarantee RowsAreOrderedBySelfTime
         -- Rows are ordered by decreasing self count, and that order is
@@ -437,6 +530,12 @@ surface TopMethodsView {
         -- sample count. The shares shown next to them are read against
         -- the whole recording too: they describe the recording, not the
         -- selection, so they hold still while the analyst narrows.
+
+    @guarantee EditingDetachesTheAppliedSelection
+        -- After applying a saved selection, editing any filter leaves
+        -- the saved entry untouched: the current selection becomes
+        -- anonymous again. A saved selection only changes through an
+        -- explicit rename or delete.
 
     @guidance
         -- The timeline strip under the view draws the sample density of
