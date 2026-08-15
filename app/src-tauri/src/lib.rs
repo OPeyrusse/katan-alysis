@@ -28,6 +28,7 @@ pub fn run() {
             commands::open_recording,
             commands::close_recording,
             commands::get_top_methods,
+            commands::get_sample_density,
             commands::list_recent_recordings,
             commands::remove_recent_recording,
             commands::clear_recent_recordings,

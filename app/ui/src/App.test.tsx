@@ -13,6 +13,7 @@ const summary: ProfileSummary = {
     { id: 0, name: 'main' },
     { id: 1, name: 'fixture-worker' },
   ],
+  thread_sample_counts: [104, 400],
   frames: [
     { class_name: 'FixtureWorkload', method_name: 'hotCoordinator' },
     { class_name: 'FixtureWorkload', method_name: 'expensiveLeaf' },
@@ -32,6 +33,7 @@ function mockedClient() {
     openRecording: vi.fn().mockResolvedValue(summary),
     closeRecording: vi.fn().mockResolvedValue(undefined),
     getTopMethods: vi.fn().mockResolvedValue(topMethods),
+    getSampleDensity: vi.fn().mockResolvedValue({ bucket_nanos: 1, counts: [1, 2, 1] }),
     listRecentRecordings: vi.fn().mockResolvedValue([]),
     removeRecentRecording: vi.fn().mockResolvedValue([]),
     clearRecentRecordings: vi.fn().mockResolvedValue([]),

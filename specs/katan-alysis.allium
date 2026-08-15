@@ -114,6 +114,12 @@ entity Stack {
 entity ProfiledThread {
     profile: Profile
     name: String
+
+    -- Whole-recording activity, deliberately blind to the current
+    -- selection: the thread panel orders and annotates by it, and
+    -- entries must not jump around while the analyst filters.
+    samples: Sample with thread = this
+    sample_count: samples.count
 }
 
 -- One execution sample: an instant, a thread, and the stack that
@@ -385,6 +391,14 @@ surface TopMethodsView {
 
     exposes:
         workspace.selection_size
+        -- The selection chrome, shared by every specialized view: the
+        -- current selection summarised in one line, the thread panel,
+        -- and the timeline strip carrying the brush.
+        workspace.selected_threads
+        workspace.selected_window
+        for thread in workspace.profile.threads:
+            thread.name
+            thread.sample_count
         for frame in workspace.top_methods:
             frame.class_name
             frame.method_name
@@ -417,6 +431,18 @@ surface TopMethodsView {
         -- come out empty, but only from a selection that genuinely
         -- matches no sample — a thread that was idle throughout the
         -- selected window, say.
+
+    @guarantee ThreadsAreOrderedByActivity
+        -- The thread panel lists threads by decreasing whole-recording
+        -- sample count. The shares shown next to them are read against
+        -- the whole recording too: they describe the recording, not the
+        -- selection, so they hold still while the analyst narrows.
+
+    @guidance
+        -- The timeline strip under the view draws the sample density of
+        -- the whole recording, never the filtered one: it is the map the
+        -- analyst brushes on, and the brush needs the surroundings to
+        -- show where the window sits.
 
     @guidance
         -- The analyst reads this table to find where time goes: a high

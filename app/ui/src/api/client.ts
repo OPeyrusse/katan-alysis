@@ -17,7 +17,18 @@ export interface ProfileSummary {
   sample_count: number;
   duration_nanos: number;
   threads: ThreadInfo[];
+  /** Whole-recording sample count per thread, indexed like `threads`. */
+  thread_sample_counts: number[];
   frames: Frame[];
+}
+
+/**
+ * Sample counts over uniform time buckets; bucket `i` covers relative
+ * nanoseconds `[i * bucket_nanos, (i + 1) * bucket_nanos)`.
+ */
+export interface SampleDensity {
+  bucket_nanos: number;
+  counts: number[];
 }
 
 export interface MethodStats {
@@ -55,6 +66,10 @@ export function closeRecording(): Promise<void> {
 
 export function getTopMethods(filters: RelativeFilters): Promise<TopMethods> {
   return invoke('get_top_methods', { filters });
+}
+
+export function getSampleDensity(buckets: number): Promise<SampleDensity> {
+  return invoke('get_sample_density', { buckets });
 }
 
 export function listRecentRecordings(): Promise<RecentRecording[]> {
