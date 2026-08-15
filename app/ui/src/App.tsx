@@ -1,48 +1,58 @@
-import { Show } from 'solid-js';
+import { Match, Show, Switch, onCleanup, onMount } from 'solid-js';
 import { createProfileStore, type ProfileStore } from './state/profile';
-import { TopMethodsTable } from './components/TopMethodsTable';
+import { tauriShell, type Shell } from './api/shell';
+import { WelcomeScreen } from './components/WelcomeScreen';
+import { Sidebar } from './components/Sidebar';
+import { TopMethodsView } from './components/views/TopMethodsView';
+import { OverviewView } from './components/views/OverviewView';
+import { basename } from './format';
 
-export function App(props: { store?: ProfileStore }) {
-  // Test-injection seam, read once on purpose: the store lives as long as
-  // the component and is never swapped.
+export function App(props: { store?: ProfileStore; shell?: Shell }) {
+  // Test-injection seams, read once on purpose: both live as long as the
+  // component and are never swapped.
   // eslint-disable-next-line solid/reactivity
   const store = props.store ?? createProfileStore();
-  let pathInput!: HTMLInputElement;
+  // eslint-disable-next-line solid/reactivity
+  const shell = props.shell ?? tauriShell;
+
+  onMount(() => {
+    // Dropping a .jfr anywhere on the window opens it, welcome screen or
+    // not: dropping over a loaded recording switches to the new one.
+    const listening = shell.onFileDrop((path) => void store.open(path));
+    onCleanup(() => void listening.then((unlisten) => unlisten()));
+  });
 
   return (
-    <main>
-      <h1>katan-alysis</h1>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          void store.open(pathInput.value);
-        }}
-      >
-        <label>
-          JFR file path: <input ref={pathInput} type="text" name="path" />
-        </label>
-        <button type="submit">Open</button>
-      </form>
-      <Show when={store.error()}>
-        <p role="alert">{store.error()}</p>
-      </Show>
-      <Show
-        when={store.summary()}
-        fallback={<p>Open a JFR recording to get started.</p>}
-      >
-        {(summary) => (
-          <>
-            <p>
-              {summary().sample_count} samples,{' '}
-              {(summary().duration_nanos / 1_000_000_000).toFixed(1)} s,{' '}
-              {summary().threads.length} threads
-            </p>
-            <Show when={store.topMethods()}>
-              {(view) => <TopMethodsTable frames={summary().frames} view={view()} />}
-            </Show>
-          </>
-        )}
-      </Show>
-    </main>
+    <Show
+      when={store.summary()}
+      fallback={<WelcomeScreen store={store} shell={shell} />}
+    >
+      {(summary) => (
+        <div class="workspace">
+          <header class="titlebar">
+            <span class="recording-name">
+              {basename(store.openedPath() ?? 'recording')}
+            </span>
+            <button onClick={() => void store.close()}>Close</button>
+          </header>
+          <Show when={store.error()}>
+            <p role="alert">{store.error()}</p>
+          </Show>
+          <div class="workspace-body">
+            <Sidebar store={store} summary={summary()} />
+            <main class="view-host">
+              <Switch>
+                <Match when={store.activeView() === 'overview'}>
+                  <OverviewView />
+                </Match>
+                <Match when={store.activeView() === 'top-methods'}>
+                  <TopMethodsView store={store} summary={summary()} />
+                </Match>
+              </Switch>
+            </main>
+          </div>
+        </div>
+      )}
+    </Show>
   );
 }

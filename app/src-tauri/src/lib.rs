@@ -4,6 +4,9 @@
 //! all aggregation lives in `jfr-aggregate`.
 
 mod commands;
+mod recents;
+
+use tauri::Manager;
 
 /// Liveness check used by the UI scaffold to validate the IPC wiring.
 #[tauri::command]
@@ -13,11 +16,21 @@ fn ping() -> &'static str {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(commands::RecordingState::default())
+        .setup(|app| {
+            let store = app.path().app_config_dir()?.join("recents.json");
+            app.manage(commands::RecentsState(store));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             ping,
             commands::open_recording,
+            commands::close_recording,
             commands::get_top_methods,
+            commands::list_recent_recordings,
+            commands::remove_recent_recording,
+            commands::clear_recent_recordings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

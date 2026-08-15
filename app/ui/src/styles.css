@@ -1,0 +1,214 @@
+/* Minimal application chrome; visual polish is a later milestone (U6). */
+
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  --border: color-mix(in srgb, currentColor 20%, transparent);
+  --accent: #4a7dbd;
+  --muted: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+body,
+#root {
+  height: 100vh;
+}
+
+button {
+  font: inherit;
+}
+
+/* ---- Welcome screen ---- */
+
+.welcome {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 3rem 2rem;
+}
+
+.welcome-header .tagline {
+  color: var(--muted);
+  margin-top: -0.5rem;
+}
+
+.welcome-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3rem;
+  margin-top: 2rem;
+}
+
+.welcome form {
+  margin-top: 1rem;
+}
+
+.drop-hint {
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+  margin-top: 1.5rem;
+}
+
+.recents {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.recents li {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.recent-entry {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding: 0.5rem;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-radius: 6px;
+  text-align: left;
+}
+
+.recent-entry:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.recent-name {
+  font-weight: 600;
+}
+
+.recent-details {
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+.recent-remove,
+.link {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.recent-remove:hover,
+.link:hover {
+  color: inherit;
+}
+
+.empty {
+  color: var(--muted);
+}
+
+/* ---- Loaded workspace ---- */
+
+.workspace {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.titlebar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.recording-name {
+  font-weight: 600;
+}
+
+.workspace-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.sidebar {
+  width: 11rem;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  border-right: 1px solid var(--border);
+  padding: 1rem 0.5rem;
+}
+
+.sidebar nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.nav-entry {
+  width: 100%;
+  text-align: left;
+  padding: 0.4rem 0.75rem;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.nav-entry:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.nav-entry.active {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.recording-facts {
+  margin: 0;
+  padding: 0 0.75rem;
+  font-size: 0.85em;
+}
+
+.recording-facts dt {
+  color: var(--muted);
+  margin-top: 0.5rem;
+}
+
+.recording-facts dd {
+  margin: 0;
+}
+
+.view-host {
+  flex: 1;
+  overflow: auto;
+  padding: 1rem 1.5rem;
+}
+
+.selection-size {
+  color: var(--muted);
+}
+
+table {
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.25rem 1rem 0.25rem 0;
+}
+
+thead th {
+  border-bottom: 1px solid var(--border);
+}
