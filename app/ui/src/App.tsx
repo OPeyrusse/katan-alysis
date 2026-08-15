@@ -21,6 +21,23 @@ export function App(props: { store?: ProfileStore; shell?: Shell }) {
     // not: dropping over a loaded recording switches to the new one.
     const listening = shell.onFileDrop((path) => void store.open(path));
     onCleanup(() => void listening.then((unlisten) => unlisten()));
+
+    // Ctrl+O: native picker. Ctrl+R: reopen the most recent recording.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (event.key === 'o') {
+        event.preventDefault();
+        void shell.pickRecordingFile().then((path) => {
+          if (path) void store.open(path);
+        });
+      } else if (event.key === 'r') {
+        event.preventDefault();
+        const recent = store.recents().find((r) => r.exists);
+        if (recent) void store.open(recent.path);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    onCleanup(() => window.removeEventListener('keydown', onKeyDown));
   });
 
   return (

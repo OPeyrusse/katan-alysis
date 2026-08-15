@@ -227,24 +227,43 @@ pub fn get_overview_signals(
     get_overview_signals_impl(&state, max_points)
 }
 
+/// A recents entry as the welcome screen consumes it: the persisted entry
+/// plus whether the file is still there — checked at list time, so a file
+/// deleted since its last open shows as missing instead of failing later.
+#[derive(Debug, Clone, Serialize)]
+pub struct RecentRecordingView {
+    #[serde(flatten)]
+    pub entry: RecentRecording,
+    pub exists: bool,
+}
+
+fn with_existence(list: Vec<RecentRecording>) -> Vec<RecentRecordingView> {
+    list.into_iter()
+        .map(|entry| RecentRecordingView {
+            exists: Path::new(&entry.path).exists(),
+            entry,
+        })
+        .collect()
+}
+
 #[tauri::command]
-pub fn list_recent_recordings(recents: tauri::State<'_, RecentsState>) -> Vec<RecentRecording> {
-    recents::load(&recents.0)
+pub fn list_recent_recordings(recents: tauri::State<'_, RecentsState>) -> Vec<RecentRecordingView> {
+    with_existence(recents::load(&recents.0))
 }
 
 #[tauri::command]
 pub fn remove_recent_recording(
     recents: tauri::State<'_, RecentsState>,
     path: String,
-) -> Result<Vec<RecentRecording>, String> {
-    recents::remove(&recents.0, &path)
+) -> Result<Vec<RecentRecordingView>, String> {
+    recents::remove(&recents.0, &path).map(with_existence)
 }
 
 #[tauri::command]
 pub fn clear_recent_recordings(
     recents: tauri::State<'_, RecentsState>,
-) -> Result<Vec<RecentRecording>, String> {
-    recents::clear(&recents.0)
+) -> Result<Vec<RecentRecordingView>, String> {
+    recents::clear(&recents.0).map(with_existence)
 }
 
 #[cfg(test)]
@@ -385,6 +404,21 @@ mod tests {
         open_recording_impl(&state, &store, "/nonexistent.jfr", 0).unwrap_err();
         let view = get_top_methods_impl(&state, RelativeFilters::default()).unwrap();
         assert_eq!(view.total_samples, summary.sample_count);
+    }
+
+    #[test]
+    fn recents_report_whether_the_file_still_exists() {
+        let (_dir, store) = temp_store();
+        let state = RecordingState::default();
+        open_recording_impl(&state, &store, FIXTURE, 1).unwrap();
+        recents::record_open(&store, "/vanished.jfr", 0, 2).unwrap();
+
+        let views = with_existence(recents::load(&store));
+        assert_eq!(views.len(), 2);
+        assert_eq!(views[0].entry.path, "/vanished.jfr");
+        assert!(!views[0].exists);
+        assert_eq!(views[1].entry.path, FIXTURE);
+        assert!(views[1].exists);
     }
 
     #[test]

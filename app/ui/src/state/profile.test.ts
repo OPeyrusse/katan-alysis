@@ -21,6 +21,7 @@ const recent: RecentRecording = {
   path: '/tmp/rec.jfr',
   size_bytes: 1024,
   last_opened_ms: 1000,
+  exists: true,
 };
 
 const density = { bucket_nanos: 100, counts: [4, 6] };

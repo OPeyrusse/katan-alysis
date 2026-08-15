@@ -96,6 +96,42 @@ button {
   font-size: 0.85em;
 }
 
+.recent-entry:disabled {
+  cursor: default;
+}
+
+li.missing .recent-name {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.opening {
+  border-style: solid;
+  animation: opening-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes opening-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+kbd {
+  font-size: 0.8em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 0.3em;
+}
+
+.primary {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 0.4rem 0.9rem;
+  cursor: pointer;
+}
+
 .recent-remove,
 .link {
   border: none;

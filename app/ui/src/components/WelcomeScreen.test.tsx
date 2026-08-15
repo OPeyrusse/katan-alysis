@@ -16,8 +16,13 @@ const summary: ProfileSummary = {
 };
 
 const recents: RecentRecording[] = [
-  { path: '/perf/prod/payment.jfr', size_bytes: 512 * 1024 * 1024, last_opened_ms: 0 },
-  { path: '/tmp/startup.jfr', size_bytes: 48 * 1024 * 1024, last_opened_ms: 0 },
+  {
+    path: '/perf/prod/payment.jfr',
+    size_bytes: 512 * 1024 * 1024,
+    last_opened_ms: 0,
+    exists: true,
+  },
+  { path: '/tmp/startup.jfr', size_bytes: 48 * 1024 * 1024, last_opened_ms: 0, exists: true },
 ];
 
 function mockedClient() {
@@ -99,7 +104,7 @@ describe('WelcomeScreen', () => {
     (shell.pickRecordingFile as ReturnType<typeof vi.fn>).mockResolvedValue('/picked.jfr');
     render(() => <WelcomeScreen store={store} shell={shell} />);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Open a file…' }));
+    await userEvent.click(screen.getByRole('button', { name: /Open a file/ }));
     expect(client.openRecording).toHaveBeenCalledWith('/picked.jfr');
   });
 
@@ -108,8 +113,46 @@ describe('WelcomeScreen', () => {
     const store = createProfileStore(client);
     render(() => <WelcomeScreen store={store} shell={noShell()} />);
 
-    await userEvent.click(screen.getByRole('button', { name: 'Open a file…' }));
+    await userEvent.click(screen.getByRole('button', { name: /Open a file/ }));
     expect(client.openRecording).not.toHaveBeenCalled();
+  });
+
+  it('marks a vanished file as missing and refuses to open it', async () => {
+    const client = mockedClient();
+    client.listRecentRecordings.mockResolvedValue([{ ...recents[0], exists: false }]);
+    const store = createProfileStore(client);
+    render(() => <WelcomeScreen store={store} shell={noShell()} />);
+
+    const entry = await screen.findByText('payment.jfr');
+    expect(screen.getByText(/file not found/)).toBeInTheDocument();
+    await userEvent.click(entry);
+    expect(client.openRecording).not.toHaveBeenCalled();
+    // The dead entry can still be removed.
+    expect(
+      screen.getByRole('button', { name: 'Remove payment.jfr from recents' }),
+    ).toBeEnabled();
+  });
+
+  it('shows the open in progress and blocks a second one', async () => {
+    const client = mockedClient();
+    let finish!: (value: ProfileSummary) => void;
+    client.openRecording.mockImplementation(
+      () => new Promise<ProfileSummary>((resolve) => (finish = resolve)),
+    );
+    const store = createProfileStore(client);
+    render(() => <WelcomeScreen store={store} shell={noShell()} />);
+
+    const first = store.open('/slow/one.jfr');
+    expect(await screen.findByRole('status')).toHaveTextContent('Opening one.jfr…');
+    expect(screen.getByRole('button', { name: /Open a file/ })).toBeDisabled();
+
+    // A second open while parsing is ignored rather than racing.
+    void store.open('/slow/two.jfr');
+    expect(client.openRecording).toHaveBeenCalledTimes(1);
+
+    finish(summary);
+    await first;
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
   it('still opens a typed path', async () => {

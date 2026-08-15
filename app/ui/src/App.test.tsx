@@ -135,6 +135,31 @@ describe('App', () => {
     await waitFor(() => expect(client.openRecording).toHaveBeenCalledWith('/dropped.jfr'));
   });
 
+  it('Ctrl+O opens the native picker', async () => {
+    const client = mockedClient();
+    const store = createProfileStore(client);
+    const shell = noShell();
+    (shell.pickRecordingFile as ReturnType<typeof vi.fn>).mockResolvedValue('/picked.jfr');
+    render(() => <App store={store} shell={shell} />);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'o', ctrlKey: true }));
+    await waitFor(() => expect(client.openRecording).toHaveBeenCalledWith('/picked.jfr'));
+  });
+
+  it('Ctrl+R reopens the most recent recording still on disk', async () => {
+    const client = mockedClient();
+    client.listRecentRecordings.mockResolvedValue([
+      { path: '/gone.jfr', size_bytes: 1, last_opened_ms: 2, exists: false },
+      { path: '/latest.jfr', size_bytes: 1, last_opened_ms: 1, exists: true },
+    ]);
+    const store = createProfileStore(client);
+    render(() => <App store={store} shell={noShell()} />);
+    await waitFor(() => expect(store.recents()).toHaveLength(2));
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', ctrlKey: true }));
+    await waitFor(() => expect(client.openRecording).toHaveBeenCalledWith('/latest.jfr'));
+  });
+
   it('surfaces backend errors on the welcome screen', async () => {
     const client = mockedClient();
     client.openRecording.mockRejectedValue('cannot open /bad.jfr');
