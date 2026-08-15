@@ -7,8 +7,12 @@ import type {
   ProfileSummary,
   RecentRecording,
   RelativeFilters,
+  SampleDensity,
   TopMethods,
 } from '../api/client';
+
+/** Resolution of the timeline density strip, in buckets. */
+const DENSITY_BUCKETS = 240;
 
 /** The specialized views the sidebar navigates between. */
 export const VIEWS = [
@@ -36,6 +40,8 @@ export interface ProfileStore {
   setActiveView: (view: ViewId) => void;
   recents: () => RecentRecording[];
   topMethods: Resource<TopMethods | undefined>;
+  /** Whole-recording sample density; fetched once per recording. */
+  density: Resource<SampleDensity | undefined>;
   open: (path: string) => Promise<void>;
   close: () => Promise<void>;
   removeRecent: (path: string) => Promise<void>;
@@ -47,6 +53,7 @@ type Client = Pick<
   | 'openRecording'
   | 'closeRecording'
   | 'getTopMethods'
+  | 'getSampleDensity'
   | 'listRecentRecordings'
   | 'removeRecentRecording'
   | 'clearRecentRecordings'
@@ -70,6 +77,11 @@ export function createProfileStore(client: Client = api): ProfileStore {
   const [topMethods] = createResource(
     () => (summary() ? { filters: filters() } : undefined),
     ({ filters }) => client.getTopMethods(filters),
+  );
+
+  const [density] = createResource(
+    () => summary(),
+    () => client.getSampleDensity(DENSITY_BUCKETS),
   );
 
   const open = async (path: string) => {
@@ -124,6 +136,7 @@ export function createProfileStore(client: Client = api): ProfileStore {
     setActiveView,
     recents,
     topMethods,
+    density,
     open,
     close,
     removeRecent,

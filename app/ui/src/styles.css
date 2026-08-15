@@ -193,6 +193,126 @@ button {
   flex: 1;
   overflow: auto;
   padding: 1rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- Selection chrome (shared by specialized views) ---- */
+
+.selection-chrome {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 0.75rem;
+}
+
+.selection-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.selection-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 1.5rem;
+}
+
+.selection-content {
+  flex: 1;
+  overflow: auto;
+}
+
+.threads-panel {
+  width: 16rem;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  padding-right: 1rem;
+}
+
+.threads-panel header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.threads-panel h3 {
+  margin: 0;
+  font-size: 0.9em;
+}
+
+.threads-panel ul {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+  overflow: auto;
+  flex: 1;
+}
+
+.thread-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.1rem 0;
+}
+
+.thread-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-share {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.thread-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.timeline-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+
+.timeline-strip {
+  position: relative;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+}
+
+.timeline-strip canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.timeline-window {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  border-inline: 1px solid var(--accent);
+  pointer-events: none;
 }
 
 .selection-size {

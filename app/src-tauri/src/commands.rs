@@ -10,7 +10,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use jfr_model::{Filters, Frame, Profile, ThreadId, ThreadInfo, TopMethods};
+use jfr_model::{Filters, Frame, Profile, SampleDensity, ThreadId, ThreadInfo, TopMethods};
 use serde::{Deserialize, Serialize};
 
 use crate::recents::{self, RecentRecording};
@@ -31,6 +31,9 @@ pub struct ProfileSummary {
     /// Recording span in nanoseconds; UI timestamps live in `[0, duration]`.
     pub duration_nanos: i64,
     pub threads: Vec<ThreadInfo>,
+    /// Whole-recording sample count per thread, indexed like `threads`.
+    /// The thread panel orders by it; it never changes with the selection.
+    pub thread_sample_counts: Vec<u64>,
     pub frames: Vec<Frame>,
 }
 
@@ -80,12 +83,22 @@ pub fn get_top_methods_impl(
     Ok(jfr_aggregate::top_methods(profile, &filters))
 }
 
+pub fn get_sample_density_impl(
+    state: &RecordingState,
+    buckets: u32,
+) -> Result<SampleDensity, String> {
+    let guard = state.0.lock().unwrap();
+    let profile = guard.as_ref().ok_or("no recording loaded")?;
+    Ok(jfr_aggregate::sample_density(profile, buckets as usize))
+}
+
 fn summarize(profile: &Profile) -> ProfileSummary {
     let (start, end) = profile.time_range_nanos().unwrap_or((0, 0));
     ProfileSummary {
         sample_count: profile.samples.len() as u64,
         duration_nanos: end - start,
         threads: profile.threads.clone(),
+        thread_sample_counts: jfr_aggregate::thread_sample_counts(profile),
         frames: profile.frames.clone(),
     }
 }
@@ -134,6 +147,14 @@ pub fn get_top_methods(
 }
 
 #[tauri::command]
+pub fn get_sample_density(
+    state: tauri::State<'_, RecordingState>,
+    buckets: u32,
+) -> Result<SampleDensity, String> {
+    get_sample_density_impl(&state, buckets)
+}
+
+#[tauri::command]
 pub fn list_recent_recordings(recents: tauri::State<'_, RecentsState>) -> Vec<RecentRecording> {
     recents::load(&recents.0)
 }
@@ -179,6 +200,26 @@ mod tests {
         assert!(summary.duration_nanos > 1_000_000_000);
         assert!(summary.threads.iter().any(|t| t.name == "fixture-worker"));
         assert!(!summary.frames.is_empty());
+        assert_eq!(summary.thread_sample_counts.len(), summary.threads.len());
+        assert_eq!(
+            summary.thread_sample_counts.iter().sum::<u64>(),
+            summary.sample_count
+        );
+    }
+
+    #[test]
+    fn sample_density_covers_every_sample() {
+        let (state, summary) = loaded_state();
+        let density = get_sample_density_impl(&state, 100).unwrap();
+        assert!(density.counts.len() <= 100);
+        assert_eq!(density.counts.iter().sum::<u64>(), summary.sample_count);
+    }
+
+    #[test]
+    fn sample_density_requires_a_loaded_recording() {
+        let state = RecordingState::default();
+        let err = get_sample_density_impl(&state, 100).unwrap_err();
+        assert!(err.contains("no recording loaded"));
     }
 
     #[test]

@@ -41,3 +41,32 @@ export function formatWhen(lastOpenedMs: number, nowMs: number): string {
 export function formatSeconds(nanos: number): string {
   return `${(nanos / 1_000_000_000).toFixed(1)} s`;
 }
+
+/** Recording-relative instant as a clock: `0:45`, `2:10`, `1:02:03`. */
+export function formatClock(nanos: number): string {
+  const totalSeconds = Math.floor(nanos / 1_000_000_000);
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+  const mmss = `${minutes}:${String(seconds).padStart(2, '0')}`;
+  return hours > 0 ? `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}` : mmss;
+}
+
+/**
+ * One-line description of a selection: `0:45–2:10 · 8 threads`, with
+ * `whole recording` / `all threads` when a category is not narrowed.
+ * Also the default name of a saved selection.
+ */
+export function selectionLabel(
+  timeRange: [number, number] | null | undefined,
+  selectedThreads: number | null,
+): string {
+  const period = timeRange
+    ? `${formatClock(timeRange[0])}–${formatClock(timeRange[1])}`
+    : 'whole recording';
+  const threads =
+    selectedThreads === null
+      ? 'all threads'
+      : `${selectedThreads} thread${selectedThreads === 1 ? '' : 's'}`;
+  return `${period} · ${threads}`;
+}

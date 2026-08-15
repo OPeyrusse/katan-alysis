@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { basename, dirname, formatBytes, formatSeconds, formatWhen } from './format';
+import {
+  basename,
+  dirname,
+  formatBytes,
+  formatClock,
+  formatSeconds,
+  formatWhen,
+  selectionLabel,
+} from './format';
 
 describe('paths', () => {
   it('splits a path into name and directory', () => {
@@ -51,5 +59,30 @@ describe('formatWhen', () => {
 describe('formatSeconds', () => {
   it('renders nanoseconds as seconds with one decimal', () => {
     expect(formatSeconds(3_200_000_000)).toBe('3.2 s');
+  });
+});
+
+describe('formatClock', () => {
+  it('renders minutes and seconds', () => {
+    expect(formatClock(45_000_000_000)).toBe('0:45');
+    expect(formatClock(130_000_000_000)).toBe('2:10');
+  });
+
+  it('adds hours when they appear', () => {
+    expect(formatClock(3_723_000_000_000)).toBe('1:02:03');
+  });
+});
+
+describe('selectionLabel', () => {
+  it('describes an unnarrowed selection', () => {
+    expect(selectionLabel(null, null)).toBe('whole recording · all threads');
+  });
+
+  it('describes a narrowed selection', () => {
+    expect(selectionLabel([45_000_000_000, 130_000_000_000], 8)).toBe('0:45–2:10 · 8 threads');
+  });
+
+  it('uses the singular for one thread', () => {
+    expect(selectionLabel(null, 1)).toBe('whole recording · 1 thread');
   });
 });

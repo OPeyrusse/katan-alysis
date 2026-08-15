@@ -10,6 +10,7 @@ const summary: ProfileSummary = {
   sample_count: 10,
   duration_nanos: 1_000,
   threads: [],
+  thread_sample_counts: [],
   frames: [],
 };
 
@@ -23,6 +24,7 @@ function mockedClient() {
     openRecording: vi.fn().mockResolvedValue(summary),
     closeRecording: vi.fn().mockResolvedValue(undefined),
     getTopMethods: vi.fn().mockResolvedValue({ rows: [], total_samples: 10 }),
+    getSampleDensity: vi.fn().mockResolvedValue({ bucket_nanos: 1, counts: [] }),
     listRecentRecordings: vi.fn().mockResolvedValue(recents),
     removeRecentRecording: vi.fn().mockResolvedValue([recents[1]]),
     clearRecentRecordings: vi.fn().mockResolvedValue([]),

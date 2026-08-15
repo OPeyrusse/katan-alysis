@@ -3,6 +3,7 @@ import { createProfileStore, type ProfileStore } from './state/profile';
 import { tauriShell, type Shell } from './api/shell';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { Sidebar } from './components/Sidebar';
+import { SelectionChrome } from './components/SelectionChrome';
 import { TopMethodsView } from './components/views/TopMethodsView';
 import { OverviewView } from './components/views/OverviewView';
 import { basename } from './format';
@@ -46,7 +47,9 @@ export function App(props: { store?: ProfileStore; shell?: Shell }) {
                   <OverviewView />
                 </Match>
                 <Match when={store.activeView() === 'top-methods'}>
-                  <TopMethodsView store={store} summary={summary()} />
+                  <SelectionChrome store={store} summary={summary()}>
+                    <TopMethodsView store={store} summary={summary()} />
+                  </SelectionChrome>
                 </Match>
               </Switch>
             </main>

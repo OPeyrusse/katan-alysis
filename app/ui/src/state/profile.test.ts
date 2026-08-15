@@ -7,6 +7,7 @@ const summary: ProfileSummary = {
   sample_count: 10,
   duration_nanos: 1_000,
   threads: [{ id: 0, name: 'main' }],
+  thread_sample_counts: [10],
   frames: [{ class_name: 'A', method_name: 'b' }],
 };
 
@@ -21,11 +22,14 @@ const recent: RecentRecording = {
   last_opened_ms: 1000,
 };
 
+const density = { bucket_nanos: 100, counts: [4, 6] };
+
 function client() {
   return {
     openRecording: vi.fn().mockResolvedValue(summary),
     closeRecording: vi.fn().mockResolvedValue(undefined),
     getTopMethods: vi.fn().mockResolvedValue(view),
+    getSampleDensity: vi.fn().mockResolvedValue(density),
     listRecentRecordings: vi.fn().mockResolvedValue([recent]),
     removeRecentRecording: vi.fn().mockResolvedValue([]),
     clearRecentRecordings: vi.fn().mockResolvedValue([]),

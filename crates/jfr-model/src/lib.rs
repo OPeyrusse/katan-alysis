@@ -114,6 +114,16 @@ impl Filters {
     }
 }
 
+/// Sample counts over uniform time buckets: the density strip drawn under
+/// the timeline brush. Bucket `i` covers recording-relative nanoseconds
+/// `[i * bucket_nanos, (i + 1) * bucket_nanos)`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SampleDensity {
+    /// Width of one bucket; `0` when the profile holds no sample.
+    pub bucket_nanos: i64,
+    pub counts: Vec<u64>,
+}
+
 /// Flat-profile statistics for one method (the "top methods" view).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MethodStats {
