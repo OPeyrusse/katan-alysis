@@ -123,6 +123,122 @@ describe('createProfileStore', () => {
     });
   });
 
+  it('saves the current selection under its default name', async () => {
+    await createRoot(async (dispose) => {
+      const store = createProfileStore(client());
+      await store.open('/a.jfr');
+
+      store.setFilters({ threads: [0], time_range_nanos: [45_000_000_000, 130_000_000_000] });
+      const name = store.saveSelection();
+
+      expect(name).toBe('0:45–2:10 · 1 thread');
+      expect(store.selections()).toEqual([
+        { name, filters: { threads: [0], time_range_nanos: [45_000_000_000, 130_000_000_000] } },
+      ]);
+      expect(store.appliedSelection()).toBe(name);
+      dispose();
+    });
+  });
+
+  it('suffixes conflicting names', async () => {
+    await createRoot(async (dispose) => {
+      const store = createProfileStore(client());
+      await store.open('/a.jfr');
+
+      store.setFilters({ threads: [0] });
+      expect(store.saveSelection()).toBe('whole recording · 1 thread');
+      store.setFilters({ threads: [0] });
+      expect(store.saveSelection()).toBe('whole recording · 1 thread (2)');
+      store.setFilters({ threads: [0] });
+      expect(store.saveSelection()).toBe('whole recording · 1 thread (3)');
+      dispose();
+    });
+  });
+
+  it('reapplies a saved selection and detaches on edit', async () => {
+    await createRoot(async (dispose) => {
+      const store = createProfileStore(client());
+      await store.open('/a.jfr');
+
+      store.setFilters({ threads: [0] });
+      const name = store.saveSelection();
+      store.clearSelection();
+      expect(store.filters()).toEqual({});
+      expect(store.appliedSelection()).toBeUndefined();
+
+      store.applySelection(name);
+      expect(store.filters()).toEqual({ threads: [0] });
+      expect(store.appliedSelection()).toBe(name);
+
+      // Any filter edit detaches the applied selection; the saved entry
+      // itself must stay untouched.
+      store.setFilters({ threads: [0, 1] });
+      expect(store.appliedSelection()).toBeUndefined();
+      expect(store.selections()[0].filters).toEqual({ threads: [0] });
+      dispose();
+    });
+  });
+
+  it('renames with the same conflict rule and keeps the application', async () => {
+    await createRoot(async (dispose) => {
+      const store = createProfileStore(client());
+      await store.open('/a.jfr');
+
+      store.setFilters({ threads: [0] });
+      store.saveSelection();
+      store.setFilters({ threads: [1] });
+      const second = store.saveSelection();
+
+      expect(store.renameSelection(second, 'peak load')).toBe('peak load');
+      expect(store.appliedSelection()).toBe('peak load');
+      // Renaming into a taken name gets suffixed.
+      expect(store.renameSelection('peak load', 'whole recording · 1 thread')).toBe(
+        'whole recording · 1 thread (2)',
+      );
+      // A blank rename is ignored.
+      expect(store.renameSelection('whole recording · 1 thread', '  ')).toBe(
+        'whole recording · 1 thread',
+      );
+      dispose();
+    });
+  });
+
+  it('deleting a selection keeps the filters it produced', async () => {
+    await createRoot(async (dispose) => {
+      const store = createProfileStore(client());
+      await store.open('/a.jfr');
+
+      store.setFilters({ threads: [0] });
+      const name = store.saveSelection();
+      store.deleteSelection(name);
+
+      expect(store.selections()).toEqual([]);
+      expect(store.appliedSelection()).toBeUndefined();
+      expect(store.filters()).toEqual({ threads: [0] });
+      dispose();
+    });
+  });
+
+  it('selections die with the recording', async () => {
+    await createRoot(async (dispose) => {
+      const store = createProfileStore(client());
+      await store.open('/a.jfr');
+      store.setFilters({ threads: [0] });
+      store.saveSelection();
+
+      await store.close();
+      expect(store.selections()).toEqual([]);
+
+      await store.open('/a.jfr');
+      store.setFilters({ threads: [0] });
+      store.saveSelection();
+      await store.open('/b.jfr');
+      expect(store.selections()).toEqual([]);
+      expect(store.appliedSelection()).toBeUndefined();
+      dispose();
+    });
+  });
+
   it('tracks the recents list across open, remove and clear', async () => {
     await createRoot(async (dispose) => {
       const api = client();

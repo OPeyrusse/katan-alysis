@@ -1,7 +1,7 @@
-import { Show, type JSX } from 'solid-js';
+import type { JSX } from 'solid-js';
 import type { ProfileSummary } from '../api/client';
 import type { ProfileStore } from '../state/profile';
-import { selectionLabel } from '../format';
+import { SelectionBar } from './SelectionBar';
 import { ThreadsPanel } from './ThreadsPanel';
 import { TimelineBrush } from './TimelineBrush';
 
@@ -16,27 +16,9 @@ export function SelectionChrome(props: {
   summary: ProfileSummary;
   children: JSX.Element;
 }) {
-  const label = () =>
-    selectionLabel(
-      props.store.filters().time_range_nanos ?? null,
-      props.store.filters().threads?.length ?? null,
-    );
-
-  const hasSelection = () => {
-    const f = props.store.filters();
-    return f.threads !== undefined || f.time_range_nanos !== undefined;
-  };
-
   return (
     <div class="selection-chrome">
-      <div class="selection-bar">
-        <span>
-          Selection: <strong>{label()}</strong>
-        </span>
-        <Show when={hasSelection()}>
-          <button onClick={() => props.store.setFilters({})}>Clear selection</button>
-        </Show>
-      </div>
+      <SelectionBar store={props.store} />
       <div class="selection-body">
         <ThreadsPanel store={props.store} summary={props.summary} />
         <div class="selection-content">{props.children}</div>
