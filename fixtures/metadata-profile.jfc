@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  JFR settings for the metadata fixture: execution samples plus the
+  overview signals (CPU load, heap summaries, GC, RSS) and the one-shot
+  metadata events (JVM, GC and OS configuration, JVM flags).
+
+  Like minimal-profile.jfc, this deliberately excludes environment and
+  system events (initial environment variables, system properties,
+  process lists...) so recordings stay free of secrets. Flag events only
+  carry flag names, values and origins.
+-->
+<configuration version="2.0" label="Fixture metadata" description="Samples + overview signals + JVM metadata">
+  <event name="jdk.ExecutionSample">
+    <setting name="enabled">true</setting>
+    <setting name="period">10 ms</setting>
+  </event>
+  <event name="jdk.CPULoad">
+    <setting name="enabled">true</setting>
+    <setting name="period">100 ms</setting>
+  </event>
+  <event name="jdk.GCHeapSummary">
+    <setting name="enabled">true</setting>
+  </event>
+  <event name="jdk.GarbageCollection">
+    <setting name="enabled">true</setting>
+    <setting name="threshold">0 ms</setting>
+  </event>
+  <event name="jdk.ResidentSetSize">
+    <setting name="enabled">true</setting>
+    <setting name="period">100 ms</setting>
+  </event>
+  <event name="jdk.JVMInformation">
+    <setting name="enabled">true</setting>
+    <setting name="period">beginChunk</setting>
+  </event>
+  <event name="jdk.GCConfiguration">
+    <setting name="enabled">true</setting>
+    <setting name="period">beginChunk</setting>
+  </event>
+  <event name="jdk.GCHeapConfiguration">
+    <setting name="enabled">true</setting>
+    <setting name="period">beginChunk</setting>
+  </event>
+  <event name="jdk.OSInformation">
+    <setting name="enabled">true</setting>
+    <setting name="period">beginChunk</setting>
+  </event>
+  <event name="jdk.CPUInformation">
+    <setting name="enabled">true</setting>
+    <setting name="period">beginChunk</setting>
+  </event>
+  <event name="jdk.PhysicalMemory">
+    <setting name="enabled">true</setting>
+    <setting name="period">everyChunk</setting>
+  </event>
+  <event name="jdk.UnsignedLongFlag">
+    <setting name="enabled">true</setting>
+    <setting name="period">beginChunk</setting>
+  </event>
+  <event name="jdk.BooleanFlag">
+    <setting name="enabled">true</setting>
+    <setting name="period">beginChunk</setting>
+  </event>
+</configuration>

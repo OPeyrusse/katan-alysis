@@ -10,7 +10,10 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use jfr_model::{Filters, Frame, Profile, SampleDensity, ThreadId, ThreadInfo, TopMethods};
+use jfr_model::{
+    Filters, Frame, GcPause, Profile, RecordingInfo, SampleDensity, ThreadId, ThreadInfo,
+    TimePoint, TopMethods,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::recents::{self, RecentRecording};
@@ -92,6 +95,61 @@ pub fn get_sample_density_impl(
     Ok(jfr_aggregate::sample_density(profile, buckets as usize))
 }
 
+pub fn get_recording_info_impl(state: &RecordingState) -> Result<RecordingInfo, String> {
+    let guard = state.0.lock().unwrap();
+    let profile = guard.as_ref().ok_or("no recording loaded")?;
+    Ok(profile.info.clone())
+}
+
+/// The overview signals, downsampled and shifted to recording-relative
+/// timestamps. Points recorded before the first sample come out with a
+/// slightly negative timestamp; the charts clamp them to the left edge.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct OverviewSignals {
+    pub cpu_jvm_user: Vec<TimePoint>,
+    pub cpu_jvm_system: Vec<TimePoint>,
+    pub cpu_machine_total: Vec<TimePoint>,
+    pub heap_used_bytes: Vec<TimePoint>,
+    pub heap_committed_bytes: Vec<TimePoint>,
+    pub rss_bytes: Vec<TimePoint>,
+    pub gc_pauses: Vec<GcPause>,
+}
+
+pub fn get_overview_signals_impl(
+    state: &RecordingState,
+    max_points: u32,
+) -> Result<OverviewSignals, String> {
+    let guard = state.0.lock().unwrap();
+    let profile = guard.as_ref().ok_or("no recording loaded")?;
+    let start = profile.time_range_nanos().map(|(s, _)| s).unwrap_or(0);
+    let series = |points: &[TimePoint]| {
+        jfr_aggregate::resample_max(points, max_points as usize)
+            .into_iter()
+            .map(|p| TimePoint {
+                ts_nanos: p.ts_nanos - start,
+                value: p.value,
+            })
+            .collect()
+    };
+    Ok(OverviewSignals {
+        cpu_jvm_user: series(&profile.signals.cpu_jvm_user),
+        cpu_jvm_system: series(&profile.signals.cpu_jvm_system),
+        cpu_machine_total: series(&profile.signals.cpu_machine_total),
+        heap_used_bytes: series(&profile.signals.heap_used_bytes),
+        heap_committed_bytes: series(&profile.signals.heap_committed_bytes),
+        rss_bytes: series(&profile.signals.rss_bytes),
+        gc_pauses: profile
+            .signals
+            .gc_pauses
+            .iter()
+            .map(|pause| GcPause {
+                ts_nanos: pause.ts_nanos - start,
+                ..pause.clone()
+            })
+            .collect(),
+    })
+}
+
 fn summarize(profile: &Profile) -> ProfileSummary {
     let (start, end) = profile.time_range_nanos().unwrap_or((0, 0));
     ProfileSummary {
@@ -155,6 +213,21 @@ pub fn get_sample_density(
 }
 
 #[tauri::command]
+pub fn get_recording_info(
+    state: tauri::State<'_, RecordingState>,
+) -> Result<RecordingInfo, String> {
+    get_recording_info_impl(&state)
+}
+
+#[tauri::command]
+pub fn get_overview_signals(
+    state: tauri::State<'_, RecordingState>,
+    max_points: u32,
+) -> Result<OverviewSignals, String> {
+    get_overview_signals_impl(&state, max_points)
+}
+
+#[tauri::command]
 pub fn list_recent_recordings(recents: tauri::State<'_, RecentsState>) -> Vec<RecentRecording> {
     recents::load(&recents.0)
 }
@@ -179,6 +252,10 @@ mod tests {
     use super::*;
 
     const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/fixture.jfr");
+    const METADATA_FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/fixture-metadata.jfr"
+    );
 
     fn temp_store() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
@@ -205,6 +282,55 @@ mod tests {
             summary.thread_sample_counts.iter().sum::<u64>(),
             summary.sample_count
         );
+    }
+
+    #[test]
+    fn recording_info_and_signals_require_a_loaded_recording() {
+        let state = RecordingState::default();
+        assert!(get_recording_info_impl(&state).is_err());
+        assert!(get_overview_signals_impl(&state, 100).is_err());
+    }
+
+    #[test]
+    fn recording_info_reflects_the_recorded_jvm() {
+        let (_dir, store) = temp_store();
+        let state = RecordingState::default();
+        open_recording_impl(&state, &store, METADATA_FIXTURE, 0).unwrap();
+        let info = get_recording_info_impl(&state).unwrap();
+        assert_eq!(info.jvm_name.as_deref(), Some("OpenJDK 64-Bit Server VM"));
+        assert_eq!(info.xmx.unwrap().value, 256 * 1024 * 1024);
+        assert!(info.debug_non_safepoints.unwrap().value);
+    }
+
+    #[test]
+    fn recording_info_is_empty_for_a_minimal_recording() {
+        let (state, _) = loaded_state();
+        let info = get_recording_info_impl(&state).unwrap();
+        assert_eq!(info, jfr_model::RecordingInfo::default());
+    }
+
+    #[test]
+    fn overview_signals_are_relative_and_bounded() {
+        let (_dir, store) = temp_store();
+        let state = RecordingState::default();
+        let summary = open_recording_impl(&state, &store, METADATA_FIXTURE, 0).unwrap();
+        let signals = get_overview_signals_impl(&state, 50).unwrap();
+
+        assert!(!signals.cpu_jvm_user.is_empty());
+        assert!(signals.cpu_jvm_user.len() <= 50);
+        assert!(!signals.heap_used_bytes.is_empty());
+        assert!(!signals.rss_bytes.is_empty());
+        assert!(!signals.gc_pauses.is_empty());
+
+        // Relative clock: everything sits in (or marginally before) the
+        // recording span, never in absolute epoch territory.
+        let margin = 2_000_000_000;
+        for p in signals.cpu_jvm_user.iter().chain(&signals.rss_bytes) {
+            assert!(p.ts_nanos > -margin && p.ts_nanos < summary.duration_nanos + margin);
+        }
+        for p in &signals.gc_pauses {
+            assert!(p.ts_nanos > -margin && p.ts_nanos < summary.duration_nanos + margin);
+        }
     }
 
     #[test]
