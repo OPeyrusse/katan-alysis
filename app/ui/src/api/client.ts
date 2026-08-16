@@ -49,11 +49,14 @@ export interface RelativeFilters {
   time_range_nanos?: [number, number] | null;
 }
 
-// One entry of the persisted recents list, most recent first.
+// One entry of the persisted recents list, most recent first. `exists`
+// is checked at list time: a file deleted since its last open shows as
+// missing instead of failing when clicked.
 export interface RecentRecording {
   path: string;
   size_bytes: number;
   last_opened_ms: number;
+  exists: boolean;
 }
 
 // A JVM flag captured at recording start, with where its value came from

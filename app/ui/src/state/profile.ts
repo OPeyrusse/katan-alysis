@@ -49,6 +49,8 @@ export interface ProfileStore {
   summary: () => ProfileSummary | undefined;
   /** Path of the recording behind `summary`, for the window chrome. */
   openedPath: () => string | undefined;
+  /** Path currently being opened; large files take a while to parse. */
+  opening: () => string | undefined;
   error: () => string | undefined;
   filters: () => RelativeFilters;
   setFilters: (filters: RelativeFilters) => void;
@@ -96,6 +98,7 @@ type Client = Pick<
 export function createProfileStore(client: Client = api): ProfileStore {
   const [summary, setSummary] = createSignal<ProfileSummary>();
   const [openedPath, setOpenedPath] = createSignal<string>();
+  const [opening, setOpening] = createSignal<string>();
   const [error, setError] = createSignal<string>();
   const [filters, setFiltersRaw] = createSignal<RelativeFilters>({});
   const [activeView, setActiveView] = createSignal<ViewId>(DEFAULT_VIEW);
@@ -138,6 +141,9 @@ export function createProfileStore(client: Client = api): ProfileStore {
   );
 
   const open = async (path: string) => {
+    // A second open while one is parsing would race the recording state.
+    if (opening() !== undefined) return;
+    setOpening(path);
     try {
       const opened = await client.openRecording(path);
       setSummary(opened);
@@ -154,6 +160,8 @@ export function createProfileStore(client: Client = api): ProfileStore {
       // A failed open never costs the analyst the recording they were
       // reading: only the error changes.
       setError(String(e));
+    } finally {
+      setOpening(undefined);
     }
   };
 
@@ -225,6 +233,7 @@ export function createProfileStore(client: Client = api): ProfileStore {
   return {
     summary,
     openedPath,
+    opening,
     error,
     filters,
     setFilters,

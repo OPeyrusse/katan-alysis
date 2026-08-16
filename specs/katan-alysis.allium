@@ -71,6 +71,10 @@ value RecentEntry {
     path: String
     size_bytes: Integer
     last_opened_ms: Integer
+    -- Checked when the list is shown, not when it was saved: a file
+    -- deleted since its last open is marked missing — it cannot be
+    -- reopened, only removed from the list.
+    still_on_disk: Boolean
 }
 
 -- A selection the analyst saved under a name: the two filters, frozen.
@@ -466,6 +470,7 @@ surface RecordingLoader {
             entry.path
             entry.size_bytes
             entry.last_opened_ms
+            entry.still_on_disk
 
     provides:
         AnalystOpensRecording(analyst, recording)
@@ -493,6 +498,12 @@ surface RecordingLoader {
         -- the process: quitting and relaunching the application shows
         -- the same recents. Everything else — the loaded recording, the
         -- filters — starts fresh.
+
+    @guarantee OpeningIsVisibleAndSingular
+        -- Parsing a large recording takes time: while an open runs, the
+        -- surface says which file is being opened, and a second open
+        -- cannot start until the first settles — two parses racing for
+        -- the workspace would leave it in neither state.
 
     related:
         RecordingOverview() when workspace.has_recording
