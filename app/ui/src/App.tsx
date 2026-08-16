@@ -44,7 +44,7 @@ export function App(props: { store?: ProfileStore; shell?: Shell }) {
             <main class="view-host">
               <Switch>
                 <Match when={store.activeView() === 'overview'}>
-                  <OverviewView />
+                  <OverviewView store={store} summary={summary()} />
                 </Match>
                 <Match when={store.activeView() === 'top-methods'}>
                   <SelectionChrome store={store} summary={summary()}>

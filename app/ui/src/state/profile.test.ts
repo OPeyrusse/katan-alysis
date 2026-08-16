@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createRoot } from 'solid-js';
 import { createProfileStore } from './profile';
 import type { ProfileSummary, RecentRecording, TopMethods } from '../api/client';
+import { emptySignals, nullInfo } from '../test/fixtures';
 
 const summary: ProfileSummary = {
   sample_count: 10,
@@ -30,6 +31,8 @@ function client() {
     closeRecording: vi.fn().mockResolvedValue(undefined),
     getTopMethods: vi.fn().mockResolvedValue(view),
     getSampleDensity: vi.fn().mockResolvedValue(density),
+    getRecordingInfo: vi.fn().mockResolvedValue(nullInfo()),
+    getOverviewSignals: vi.fn().mockResolvedValue(emptySignals()),
     listRecentRecordings: vi.fn().mockResolvedValue([recent]),
     removeRecentRecording: vi.fn().mockResolvedValue([]),
     clearRecentRecordings: vi.fn().mockResolvedValue([]),
@@ -96,11 +99,11 @@ describe('createProfileStore', () => {
 
       await store.open('/a.jfr');
       store.setFilters({ threads: [0] });
-      store.setActiveView('overview');
+      store.setActiveView('top-methods');
 
       await store.open('/b.jfr');
       expect(store.filters()).toEqual({});
-      expect(store.activeView()).toBe('top-methods');
+      expect(store.activeView()).toBe('overview');
       dispose();
     });
   });

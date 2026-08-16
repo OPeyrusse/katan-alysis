@@ -6,8 +6,10 @@ import * as api from '../api/client';
 import { selectionLabel } from '../format';
 import { uniqueName } from './selections';
 import type {
+  OverviewSignals,
   ProfileSummary,
   RecentRecording,
+  RecordingInfo,
   RelativeFilters,
   SampleDensity,
   TopMethods,
@@ -15,6 +17,9 @@ import type {
 
 /** Resolution of the timeline density strip, in buckets. */
 const DENSITY_BUCKETS = 240;
+
+/** Maximum points per overview series; the charts are ~600 px wide. */
+const OVERVIEW_POINTS = 600;
 
 /** The specialized views the sidebar navigates between. */
 export const VIEWS = [
@@ -29,7 +34,7 @@ export const VIEWS = [
 export type ViewId = (typeof VIEWS)[number]['id'];
 
 /** Where a freshly opened recording lands. */
-export const DEFAULT_VIEW: ViewId = 'top-methods';
+export const DEFAULT_VIEW: ViewId = 'overview';
 
 /**
  * A selection the analyst saved under a name. In-memory only: the list
@@ -65,6 +70,10 @@ export interface ProfileStore {
   topMethods: Resource<TopMethods | undefined>;
   /** Whole-recording sample density; fetched once per recording. */
   density: Resource<SampleDensity | undefined>;
+  /** JVM/GC/host metadata of the recording; fetched once per recording. */
+  info: Resource<RecordingInfo | undefined>;
+  /** Overview signals; fetched once per recording. */
+  overviewSignals: Resource<OverviewSignals | undefined>;
   open: (path: string) => Promise<void>;
   close: () => Promise<void>;
   removeRecent: (path: string) => Promise<void>;
@@ -77,6 +86,8 @@ type Client = Pick<
   | 'closeRecording'
   | 'getTopMethods'
   | 'getSampleDensity'
+  | 'getRecordingInfo'
+  | 'getOverviewSignals'
   | 'listRecentRecordings'
   | 'removeRecentRecording'
   | 'clearRecentRecordings'
@@ -114,6 +125,16 @@ export function createProfileStore(client: Client = api): ProfileStore {
   const [density] = createResource(
     () => summary(),
     () => client.getSampleDensity(DENSITY_BUCKETS),
+  );
+
+  const [info] = createResource(
+    () => summary(),
+    () => client.getRecordingInfo(),
+  );
+
+  const [overviewSignals] = createResource(
+    () => summary(),
+    () => client.getOverviewSignals(OVERVIEW_POINTS),
   );
 
   const open = async (path: string) => {
@@ -212,6 +233,8 @@ export function createProfileStore(client: Client = api): ProfileStore {
     recents,
     topMethods,
     density,
+    info,
+    overviewSignals,
     selections,
     appliedSelection,
     saveSelection,
