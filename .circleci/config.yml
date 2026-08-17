@@ -172,14 +172,49 @@ jobs:
 workflows:
   ci:
     jobs:
-      - spec-check
-      - rust-test
-      - tauri-check
-      - ui-test
+      # PR-only jobs: all quality gates run on every branch except main.
+      - spec-check:
+          filters:
+            branches:
+              ignore: main
+      - rust-test:
+          filters:
+            branches:
+              ignore: main
+      - tauri-check:
+          filters:
+            branches:
+              ignore: main
+      - ui-test:
+          filters:
+            branches:
+              ignore: main
       - ui-build:
           requires:
             - ui-test
+          filters:
+            branches:
+              ignore: main
+
+      # Optional tauri-build on PRs: a manual approval gate lets reviewers
+      # trigger the expensive full build without running it automatically.
+      - approve-tauri-build:
+          type: approval
+          filters:
+            branches:
+              ignore: main
       - tauri-build:
+          name: tauri-build-pr
+          requires:
+            - approve-tauri-build
+          filters:
+            branches:
+              ignore: main
+
+      # On main, run only the full desktop build — quality gates already
+      # passed on the PR branch.
+      - tauri-build:
+          name: tauri-build-main
           filters:
             branches:
               only: main
