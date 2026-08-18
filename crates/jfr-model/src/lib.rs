@@ -226,6 +226,22 @@ pub struct TopMethods {
     pub total_samples: u64,
 }
 
+/// One node of the flamegraph: a frame merged across every stack that
+/// reaches it through the same ancestors, with the children continuing
+/// the call chain beneath it. The tree is rooted synthetically above every
+/// stack (`frame: None`, `samples` equal to the filtered sample count) so
+/// that multiple entry points share one root.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FlameNode {
+    /// The frame this node merges; `None` only for the synthetic root.
+    pub frame: Option<FrameId>,
+    /// Samples whose stack passes through this node.
+    pub samples: u64,
+    /// Children sorted by decreasing `samples`, ties broken by frame id so
+    /// the tree is deterministic.
+    pub children: Vec<FlameNode>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,5 +404,21 @@ mod tests {
         let json = serde_json::to_string(&profile).unwrap();
         let back: Profile = serde_json::from_str(&json).unwrap();
         assert_eq!(back, profile);
+    }
+
+    #[test]
+    fn flame_node_round_trips_through_json_including_the_synthetic_root() {
+        let tree = FlameNode {
+            frame: None,
+            samples: 3,
+            children: vec![FlameNode {
+                frame: Some(FrameId(0)),
+                samples: 3,
+                children: vec![],
+            }],
+        };
+        let json = serde_json::to_string(&tree).unwrap();
+        let back: FlameNode = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, tree);
     }
 }
