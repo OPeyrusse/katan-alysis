@@ -6,6 +6,7 @@ import { Sidebar } from './components/Sidebar';
 import { SelectionChrome } from './components/SelectionChrome';
 import { TopMethodsView } from './components/views/TopMethodsView';
 import { OverviewView } from './components/views/OverviewView';
+import { FlamegraphView } from './components/views/FlamegraphView';
 import { basename } from './format';
 
 export function App(props: { store?: ProfileStore; shell?: Shell }) {
@@ -66,6 +67,11 @@ export function App(props: { store?: ProfileStore; shell?: Shell }) {
                 <Match when={store.activeView() === 'top-methods'}>
                   <SelectionChrome store={store} summary={summary()}>
                     <TopMethodsView store={store} summary={summary()} />
+                  </SelectionChrome>
+                </Match>
+                <Match when={store.activeView() === 'flamegraph'}>
+                  <SelectionChrome store={store} summary={summary()}>
+                    <FlamegraphView store={store} summary={summary()} />
                   </SelectionChrome>
                 </Match>
               </Switch>

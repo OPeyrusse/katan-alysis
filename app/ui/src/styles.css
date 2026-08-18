@@ -474,3 +474,32 @@ td {
 thead th {
   border-bottom: 1px solid var(--border);
 }
+
+/* ---- Flamegraph ---- */
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+
+.flame-surface {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.flame-surface canvas {
+  display: block;
+  width: 100%;
+}
+
+.flame-hover {
+  font-size: 0.85em;
+  min-height: 1.2em;
+}

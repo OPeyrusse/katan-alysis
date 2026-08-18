@@ -6,6 +6,7 @@ import * as api from '../api/client';
 import { selectionLabel } from '../format';
 import { uniqueName } from './selections';
 import type {
+  FlameNode,
   OverviewSignals,
   ProfileSummary,
   RecentRecording,
@@ -25,7 +26,7 @@ const OVERVIEW_POINTS = 600;
 export const VIEWS = [
   { id: 'overview', label: 'Overview', ready: true },
   { id: 'top-methods', label: 'Top methods', ready: true },
-  { id: 'flamegraph', label: 'Flamegraph', ready: false },
+  { id: 'flamegraph', label: 'Flamegraph', ready: true },
   { id: 'heatmap', label: 'Heatmap', ready: false },
   { id: 'merged-calls', label: 'Merged calls', ready: false },
   { id: 'gc', label: 'GC', ready: false },
@@ -70,6 +71,8 @@ export interface ProfileStore {
   deleteSelection: (name: string) => void;
   recents: () => RecentRecording[];
   topMethods: Resource<TopMethods | undefined>;
+  /** Flamegraph tree; re-fetched, like topMethods, on every filter change. */
+  flamegraph: Resource<FlameNode | undefined>;
   /** Whole-recording sample density; fetched once per recording. */
   density: Resource<SampleDensity | undefined>;
   /** JVM/GC/host metadata of the recording; fetched once per recording. */
@@ -87,6 +90,7 @@ type Client = Pick<
   | 'openRecording'
   | 'closeRecording'
   | 'getTopMethods'
+  | 'getFlamegraph'
   | 'getSampleDensity'
   | 'getRecordingInfo'
   | 'getOverviewSignals'
@@ -123,6 +127,11 @@ export function createProfileStore(client: Client = api): ProfileStore {
   const [topMethods] = createResource(
     () => (summary() ? { filters: filters() } : undefined),
     ({ filters }) => client.getTopMethods(filters),
+  );
+
+  const [flamegraph] = createResource(
+    () => (summary() ? { filters: filters() } : undefined),
+    ({ filters }) => client.getFlamegraph(filters),
   );
 
   const [density] = createResource(
@@ -241,6 +250,7 @@ export function createProfileStore(client: Client = api): ProfileStore {
     setActiveView,
     recents,
     topMethods,
+    flamegraph,
     density,
     info,
     overviewSignals,
