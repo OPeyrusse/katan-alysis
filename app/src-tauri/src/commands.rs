@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use jfr_model::{
-    Filters, FlameNode, Frame, GcPause, Profile, RecordingInfo, SampleDensity, ThreadId,
-    ThreadInfo, TimePoint, TopMethods,
+    Filters, FlameNode, Frame, GcPause, HeatmapGrid, Profile, RecordingInfo, SampleDensity,
+    ThreadId, ThreadInfo, TimePoint, TopMethods,
 };
 use serde::{Deserialize, Serialize};
 
@@ -94,6 +94,16 @@ pub fn get_flamegraph_impl(
     let profile = guard.as_ref().ok_or("no recording loaded")?;
     let filters = to_absolute(profile, filters);
     Ok(jfr_aggregate::flame_graph(profile, &filters))
+}
+
+pub fn get_heatmap_impl(
+    state: &RecordingState,
+    filters: RelativeFilters,
+) -> Result<HeatmapGrid, String> {
+    let guard = state.0.lock().unwrap();
+    let profile = guard.as_ref().ok_or("no recording loaded")?;
+    let filters = to_absolute(profile, filters);
+    Ok(jfr_aggregate::heatmap(profile, &filters))
 }
 
 pub fn get_sample_density_impl(
@@ -220,6 +230,14 @@ pub fn get_flamegraph(
     filters: RelativeFilters,
 ) -> Result<FlameNode, String> {
     get_flamegraph_impl(&state, filters)
+}
+
+#[tauri::command]
+pub fn get_heatmap(
+    state: tauri::State<'_, RecordingState>,
+    filters: RelativeFilters,
+) -> Result<HeatmapGrid, String> {
+    get_heatmap_impl(&state, filters)
 }
 
 #[tauri::command]
@@ -547,5 +565,41 @@ mod tests {
         .unwrap();
         assert!(root.samples > 0);
         assert!(root.samples < summary.sample_count);
+    }
+
+    #[test]
+    fn heatmap_requires_a_loaded_recording() {
+        let state = RecordingState::default();
+        let err = get_heatmap_impl(&state, RelativeFilters::default()).unwrap_err();
+        assert!(err.contains("no recording loaded"));
+    }
+
+    #[test]
+    fn heatmap_grid_covers_all_samples_without_filters() {
+        let (state, summary) = loaded_state();
+        let grid = get_heatmap_impl(&state, RelativeFilters::default()).unwrap();
+        let total: u64 = grid.columns.iter().flatten().sum();
+        assert_eq!(total, summary.sample_count);
+    }
+
+    #[test]
+    fn heatmap_thread_filter_narrows_the_grid() {
+        let (state, summary) = loaded_state();
+        let worker = summary
+            .threads
+            .iter()
+            .find(|t| t.name == "fixture-worker")
+            .unwrap();
+        let grid = get_heatmap_impl(
+            &state,
+            RelativeFilters {
+                threads: Some(vec![worker.id.0]),
+                ..RelativeFilters::default()
+            },
+        )
+        .unwrap();
+        let total: u64 = grid.columns.iter().flatten().sum();
+        assert!(total > 0);
+        assert!(total < summary.sample_count);
     }
 }
