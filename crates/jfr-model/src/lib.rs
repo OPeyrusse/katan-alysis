@@ -226,6 +226,29 @@ pub struct TopMethods {
     pub total_samples: u64,
 }
 
+/// FlameScope-style density grid: samples bucketed by column (a fixed span
+/// of recording time, e.g. one second) and row (position within that span,
+/// e.g. a 20ms slice) so that a periodic pattern lines up in the same rows
+/// from one column to the next. Columns span only the filtered samples —
+/// like every other view, the grid follows the current selection rather
+/// than always covering the whole recording.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeatmapGrid {
+    /// Width of one column, in nanoseconds.
+    pub column_nanos: i64,
+    /// Width of one row, in nanoseconds.
+    pub row_nanos: i64,
+    /// Rows per column; every column has exactly this many, `0` when the
+    /// grid holds no sample.
+    pub rows: usize,
+    /// `columns[i][j]` is the sample count of row `j` of column `i`; column
+    /// `i` covers `[i * column_nanos, (i + 1) * column_nanos)`, row `j`
+    /// within it covers `[j * row_nanos, (j + 1) * row_nanos)`.
+    pub columns: Vec<Vec<u64>>,
+    /// The tallest cell, for scaling color intensity; `0` when empty.
+    pub max_count: u64,
+}
+
 /// One node of the flamegraph: a frame merged across every stack that
 /// reaches it through the same ancestors, with the children continuing
 /// the call chain beneath it. The tree is rooted synthetically above every
@@ -404,6 +427,28 @@ mod tests {
         let json = serde_json::to_string(&profile).unwrap();
         let back: Profile = serde_json::from_str(&json).unwrap();
         assert_eq!(back, profile);
+    }
+
+    #[test]
+    fn heatmap_grid_round_trips_through_json() {
+        let grid = HeatmapGrid {
+            column_nanos: 1_000_000_000,
+            row_nanos: 20_000_000,
+            rows: 50,
+            columns: vec![vec![0; 50]],
+            max_count: 3,
+        };
+        let json = serde_json::to_string(&grid).unwrap();
+        let back: HeatmapGrid = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, grid);
+    }
+
+    #[test]
+    fn empty_heatmap_grid_is_the_default() {
+        let grid = HeatmapGrid::default();
+        assert_eq!(grid.rows, 0);
+        assert!(grid.columns.is_empty());
+        assert_eq!(grid.max_count, 0);
     }
 
     #[test]
