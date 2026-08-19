@@ -3,7 +3,7 @@
 --
 -- Scope: the JFR analysis desktop application — opening a recording,
 -- narrowing it with the cross-cutting filters, and reading the flat
--- profile ("top methods") and flamegraph views.
+-- profile ("top methods"), flamegraph and heatmap views.
 --
 -- Includes:
 --   - the outcome of opening a recording (loaded summary vs. error)
@@ -18,11 +18,15 @@
 --   - the flamegraph: the same selection's call stacks merged into a
 --     tree by shared prefix, preserving recursion instead of
 --     collapsing it, with the analyst able to zoom into a subtree
+--   - the heatmap: sample density over the whole recording, bucketed
+--     into one-second columns of twenty-millisecond rows so a
+--     periodic pattern lines up down the columns, with the analyst
+--     able to brush a rectangle of cells into a time window
 --   - the boundaries the analyst interacts with
 -- Excludes:
 --   - the JFR binary format and its parsing (jfrs library, external)
 --   - transport (Tauri IPC), rendering technology and packaging
---   - views not yet built: heatmap, merged call tree
+--   - views not yet built: merged call tree
 --   - several recordings open at once. It is a decided direction, not
 --     an open question: the workspace will hold more than one profile
 --     so recordings can be compared. Until that work starts the spec
@@ -525,6 +529,7 @@ surface RecordingLoader {
         RecordingOverview() when workspace.has_recording
         TopMethodsView() when workspace.has_recording
         FlamegraphView() when workspace.has_recording
+        HeatmapView() when workspace.has_recording
 }
 
 -- The landing view of a freshly opened recording: what the recording
@@ -569,6 +574,7 @@ surface RecordingOverview {
     related:
         TopMethodsView() when workspace.has_recording
         FlamegraphView() when workspace.has_recording
+        HeatmapView() when workspace.has_recording
 }
 
 surface TopMethodsView {
@@ -724,6 +730,73 @@ surface FlamegraphView {
         -- The timeline strip and thread panel are the same selection
         -- chrome as top-methods: narrowing the selection here narrows
         -- it there too, and vice versa.
+}
+
+-- The FlameScope-style heatmap: sample density over the whole recording,
+-- bucketed into columns of a fixed span (a second) split into rows of a
+-- fixed width within it (twenty milliseconds), so a phenomenon that
+-- recurs every column lands in the same row from one column to the next
+-- and reads as a visible line. Complements top-methods and the
+-- flamegraph as the surface the analyst brushes a new time window from,
+-- rather than one they narrow with an existing selection.
+surface HeatmapView {
+    facing analyst: Analyst
+
+    exposes:
+        workspace.selection_size
+        workspace.profile.duration_nanos
+        -- The selection chrome, shared with top-methods and the
+        -- flamegraph.
+        workspace.selected_threads
+        workspace.selected_window
+        for thread in workspace.profile.threads:
+            thread.name
+            thread.sample_count
+        for selection in workspace.saved_selections:
+            selection.name
+
+    provides:
+        AnalystSelectsThreads(analyst, threads)
+            when workspace.has_recording
+        AnalystClearsThreadSelection(analyst)
+            when workspace.selected_threads != null
+        AnalystSelectsTimeWindow(analyst, window)
+            when workspace.has_recording
+        AnalystClearsTimeWindow(analyst)
+            when workspace.selected_window != null
+        AnalystSavesSelection(analyst)
+            when workspace.selected_threads != null
+                or workspace.selected_window != null
+        AnalystAppliesSelection(analyst, selection)
+            when workspace.saved_selections.count > 0
+        AnalystClearsSelection(analyst)
+            when workspace.has_recording
+        AnalystRenamesSelection(analyst, selection, wanted)
+            when workspace.saved_selections.count > 0
+        AnalystDeletesSelection(analyst, selection)
+            when workspace.saved_selections.count > 0
+
+    @guarantee HeatmapSpansTheWholeRecording
+        -- The grid's columns always cover the whole recording, regardless
+        -- of the current thread or time selection: this is the surface
+        -- the analyst brushes a new window from, so it needs the whole
+        -- recording as context to place that window against. Only which
+        -- samples populate a cell follows the current selection, exactly
+        -- like every other view.
+
+    @guarantee BrushingSetsTheTimeWindow
+        -- Dragging a rectangle of cells sets the time window to the span
+        -- it bounds: covering every row of the columns it spans reaches
+        -- exactly those columns' span, while staying within a single
+        -- column's rows narrows to a slice inside one second — finer
+        -- than the timeline brush, and unique to this view.
+
+    @guidance
+        -- The selection chrome is the same as top-methods and the
+        -- flamegraph: narrowing it here narrows it everywhere, and vice
+        -- versa. A time window already selected elsewhere still shows
+        -- against the whole-recording grid, per HeatmapSpansTheWholeRecording,
+        -- so the analyst can see where it sits before adjusting it.
 }
 
 ------------------------------------------------------------

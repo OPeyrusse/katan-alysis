@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { App } from './App';
 import { createProfileStore } from './state/profile';
 import type { Shell } from './api/shell';
-import type { FlameNode, ProfileSummary, TopMethods } from './api/client';
+import type { FlameNode, HeatmapGrid, ProfileSummary, TopMethods } from './api/client';
 import { emptySignals, nullInfo } from './test/fixtures';
 
 const summary: ProfileSummary = {
@@ -38,12 +38,21 @@ const flamegraph: FlameNode = {
   ],
 };
 
+const heatmap: HeatmapGrid = {
+  column_nanos: 1_000_000_000,
+  row_nanos: 20_000_000,
+  rows: 50,
+  columns: [Array(50).fill(0)],
+  max_count: 0,
+};
+
 function mockedClient() {
   return {
     openRecording: vi.fn().mockResolvedValue(summary),
     closeRecording: vi.fn().mockResolvedValue(undefined),
     getTopMethods: vi.fn().mockResolvedValue(topMethods),
     getFlamegraph: vi.fn().mockResolvedValue(flamegraph),
+    getHeatmap: vi.fn().mockResolvedValue(heatmap),
     getSampleDensity: vi.fn().mockResolvedValue({ bucket_nanos: 1, counts: [1, 2, 1] }),
     getRecordingInfo: vi.fn().mockResolvedValue(nullInfo()),
     getOverviewSignals: vi.fn().mockResolvedValue(emptySignals()),
@@ -115,7 +124,10 @@ describe('App', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Flamegraph' }));
     expect(screen.getByRole('region', { name: 'Flamegraph view' })).toBeInTheDocument();
 
-    expect(screen.getByRole('button', { name: 'Heatmap' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: 'Heatmap' }));
+    expect(screen.getByRole('region', { name: 'Heatmap view' })).toBeInTheDocument();
+
+    expect(screen.getByRole('button', { name: 'Merged calls' })).toBeDisabled();
   });
 
   it('closes the recording back to the welcome screen', async () => {

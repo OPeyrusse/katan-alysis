@@ -31,6 +31,9 @@ function mockedClient() {
     closeRecording: vi.fn().mockResolvedValue(undefined),
     getTopMethods: vi.fn().mockResolvedValue({ rows: [], total_samples: 10 }),
     getFlamegraph: vi.fn().mockResolvedValue({ frame: null, samples: 0, children: [] }),
+    getHeatmap: vi
+      .fn()
+      .mockResolvedValue({ column_nanos: 0, row_nanos: 0, rows: 0, columns: [], max_count: 0 }),
     getSampleDensity: vi.fn().mockResolvedValue({ bucket_nanos: 1, counts: [] }),
     getRecordingInfo: vi.fn().mockResolvedValue(nullInfo()),
     getOverviewSignals: vi.fn().mockResolvedValue(emptySignals()),

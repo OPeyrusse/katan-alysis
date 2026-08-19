@@ -7,6 +7,7 @@ import { selectionLabel } from '../format';
 import { uniqueName } from './selections';
 import type {
   FlameNode,
+  HeatmapGrid,
   OverviewSignals,
   ProfileSummary,
   RecentRecording,
@@ -27,7 +28,7 @@ export const VIEWS = [
   { id: 'overview', label: 'Overview', ready: true },
   { id: 'top-methods', label: 'Top methods', ready: true },
   { id: 'flamegraph', label: 'Flamegraph', ready: true },
-  { id: 'heatmap', label: 'Heatmap', ready: false },
+  { id: 'heatmap', label: 'Heatmap', ready: true },
   { id: 'merged-calls', label: 'Merged calls', ready: false },
   { id: 'gc', label: 'GC', ready: false },
 ] as const;
@@ -73,6 +74,8 @@ export interface ProfileStore {
   topMethods: Resource<TopMethods | undefined>;
   /** Flamegraph tree; re-fetched, like topMethods, on every filter change. */
   flamegraph: Resource<FlameNode | undefined>;
+  /** FlameScope grid; re-fetched, like topMethods, on every filter change. */
+  heatmap: Resource<HeatmapGrid | undefined>;
   /** Whole-recording sample density; fetched once per recording. */
   density: Resource<SampleDensity | undefined>;
   /** JVM/GC/host metadata of the recording; fetched once per recording. */
@@ -91,6 +94,7 @@ type Client = Pick<
   | 'closeRecording'
   | 'getTopMethods'
   | 'getFlamegraph'
+  | 'getHeatmap'
   | 'getSampleDensity'
   | 'getRecordingInfo'
   | 'getOverviewSignals'
@@ -132,6 +136,11 @@ export function createProfileStore(client: Client = api): ProfileStore {
   const [flamegraph] = createResource(
     () => (summary() ? { filters: filters() } : undefined),
     ({ filters }) => client.getFlamegraph(filters),
+  );
+
+  const [heatmap] = createResource(
+    () => (summary() ? { filters: filters() } : undefined),
+    ({ filters }) => client.getHeatmap(filters),
   );
 
   const [density] = createResource(
@@ -251,6 +260,7 @@ export function createProfileStore(client: Client = api): ProfileStore {
     recents,
     topMethods,
     flamegraph,
+    heatmap,
     density,
     info,
     overviewSignals,
