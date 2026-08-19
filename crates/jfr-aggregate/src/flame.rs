@@ -1,6 +1,6 @@
 //! Flamegraph: a call tree merging stacks that share a prefix.
 
-use jfr_model::{Filters, FlameNode, FrameId, Profile};
+use jfr_model::{Filters, FlameNode, Profile};
 
 /// Builds the flamegraph from the filtered samples: a tree rooted
 /// synthetically above every stack (`frame: None`, `samples` equal to the
@@ -21,49 +21,17 @@ pub fn flame_graph(profile: &Profile, filters: &Filters) -> FlameNode {
 
     for (stack_id, count) in stack_counts {
         let frames = &profile.stacks[stack_id.0 as usize];
-        insert(&mut root, frames, count);
+        super::merge_path(&mut root, frames, count);
     }
 
-    sort_children(&mut root);
+    super::sort_children(&mut root);
     root
-}
-
-/// Walks `frames` from the given node, creating a child per new frame and
-/// adding `count` to every node on the path — the node's own children stay
-/// unsorted until [`sort_children`] runs once at the end.
-fn insert(root: &mut FlameNode, frames: &[FrameId], count: u64) {
-    let mut node = root;
-    for &frame in frames {
-        let index = match node.children.iter().position(|c| c.frame == Some(frame)) {
-            Some(index) => index,
-            None => {
-                node.children.push(FlameNode {
-                    frame: Some(frame),
-                    samples: 0,
-                    children: Vec::new(),
-                });
-                node.children.len() - 1
-            }
-        };
-        node = &mut node.children[index];
-        node.samples += count;
-    }
-}
-
-/// Orders children by decreasing sample count, ties broken by frame id so
-/// the tree is deterministic across runs over the same selection.
-fn sort_children(node: &mut FlameNode) {
-    node.children
-        .sort_by(|a, b| b.samples.cmp(&a.samples).then(a.frame.cmp(&b.frame)));
-    for child in &mut node.children {
-        sort_children(child);
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jfr_model::{Frame, Sample, StackId, ThreadId, ThreadInfo};
+    use jfr_model::{Frame, FrameId, Sample, StackId, ThreadId, ThreadInfo};
 
     /// Builds a profile from `(ts, thread, stack)` samples over stacks given
     /// as frame-index lists; frames are named `f0`, `f1`, ...

@@ -7,7 +7,16 @@
 
 use std::fs::File;
 
-use jfr_model::{Filters, MethodStats};
+use jfr_model::{Filters, FrameId, MethodStats};
+
+fn frame_id_of(profile: &jfr_model::Profile, label: &str) -> FrameId {
+    let index = profile
+        .frames
+        .iter()
+        .position(|f| f.label() == label)
+        .unwrap_or_else(|| panic!("no frame for {label}"));
+    FrameId(index as u32)
+}
 
 #[test]
 fn fixture_flat_profile_surfaces_the_hot_coordinator() {
@@ -36,4 +45,38 @@ fn fixture_flat_profile_surfaces_the_hot_coordinator() {
     // The actual leaf work happens below it.
     let leaf = stats_by_label("FixtureWorkload.expensiveLeaf");
     assert!(leaf.total_samples > view.total_samples / 2);
+}
+
+#[test]
+fn fixture_merged_calls_splits_the_diluted_bottleneck() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/fixture.jfr");
+    let profile = jfr_ingest::read_profile(File::open(path).unwrap()).unwrap();
+    let coordinator = frame_id_of(&profile, "FixtureWorkload.hotCoordinator");
+    let tree = jfr_aggregate::merged_calls(&profile, &Filters::default(), coordinator);
+
+    assert_eq!(tree.focus, coordinator);
+    assert_eq!(tree.callers.samples, tree.callees.samples);
+
+    // pathA, pathB and the worker's loop all call hotCoordinator directly:
+    // three distinct immediate callers merge into three branches.
+    assert_eq!(tree.callers.children.len(), 3);
+
+    // Below it, the actual leaf work dominates the cheap one.
+    let expensive_leaf = frame_id_of(&profile, "FixtureWorkload.expensiveLeaf");
+    let cheap_work = frame_id_of(&profile, "FixtureWorkload.cheapWork");
+    let leaf_samples = tree
+        .callees
+        .children
+        .iter()
+        .find(|c| c.frame == Some(expensive_leaf))
+        .unwrap()
+        .samples;
+    let cheap_samples = tree
+        .callees
+        .children
+        .iter()
+        .find(|c| c.frame == Some(cheap_work))
+        .unwrap()
+        .samples;
+    assert!(leaf_samples > cheap_samples);
 }
