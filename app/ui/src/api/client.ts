@@ -66,6 +66,17 @@ export interface HeatmapGrid {
   max_count: number;
 }
 
+/**
+ * Callers and callees merged around one focus method: both trees are
+ * rooted at `focus` (never `null`, unlike `FlameNode`'s synthetic root),
+ * with the same `samples` — the frame's total across the selection.
+ */
+export interface MergedCallTree {
+  focus: number;
+  callers: FlameNode;
+  callees: FlameNode;
+}
+
 // An empty selection is not a filter: an empty thread list, or a range
 // holding no instant, widens back to the whole recording. The UI can send
 // the selection as-is — it never has to special-case "nothing selected".
@@ -157,6 +168,13 @@ export function getFlamegraph(filters: RelativeFilters): Promise<FlameNode> {
 
 export function getHeatmap(filters: RelativeFilters): Promise<HeatmapGrid> {
   return invoke('get_heatmap', { filters });
+}
+
+export function getMergedCalls(
+  frameId: number,
+  filters: RelativeFilters,
+): Promise<MergedCallTree> {
+  return invoke('get_merged_calls', { frameId, filters });
 }
 
 export function getSampleDensity(buckets: number): Promise<SampleDensity> {
