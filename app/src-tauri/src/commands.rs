@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use jfr_model::{
-    Filters, FlameNode, Frame, GcPause, HeatmapGrid, Profile, RecordingInfo, SampleDensity,
-    ThreadId, ThreadInfo, TimePoint, TopMethods,
+    Filters, FlameNode, Frame, FrameId, GcPause, HeatmapGrid, MergedCallTree, Profile,
+    RecordingInfo, SampleDensity, ThreadId, ThreadInfo, TimePoint, TopMethods,
 };
 use serde::{Deserialize, Serialize};
 
@@ -104,6 +104,21 @@ pub fn get_heatmap_impl(
     let profile = guard.as_ref().ok_or("no recording loaded")?;
     let filters = to_absolute(profile, filters);
     Ok(jfr_aggregate::heatmap(profile, &filters))
+}
+
+pub fn get_merged_calls_impl(
+    state: &RecordingState,
+    frame_id: u32,
+    filters: RelativeFilters,
+) -> Result<MergedCallTree, String> {
+    let guard = state.0.lock().unwrap();
+    let profile = guard.as_ref().ok_or("no recording loaded")?;
+    let filters = to_absolute(profile, filters);
+    Ok(jfr_aggregate::merged_calls(
+        profile,
+        &filters,
+        FrameId(frame_id),
+    ))
 }
 
 pub fn get_sample_density_impl(
@@ -238,6 +253,15 @@ pub fn get_heatmap(
     filters: RelativeFilters,
 ) -> Result<HeatmapGrid, String> {
     get_heatmap_impl(&state, filters)
+}
+
+#[tauri::command]
+pub fn get_merged_calls(
+    state: tauri::State<'_, RecordingState>,
+    frame_id: u32,
+    filters: RelativeFilters,
+) -> Result<MergedCallTree, String> {
+    get_merged_calls_impl(&state, frame_id, filters)
 }
 
 #[tauri::command]
@@ -601,5 +625,68 @@ mod tests {
         let total: u64 = grid.columns.iter().flatten().sum();
         assert!(total > 0);
         assert!(total < summary.sample_count);
+    }
+
+    fn frame_id(summary: &ProfileSummary, label: &str) -> u32 {
+        summary
+            .frames
+            .iter()
+            .position(|f| f.label() == label)
+            .unwrap_or_else(|| panic!("no frame for {label}")) as u32
+    }
+
+    #[test]
+    fn merged_calls_requires_a_loaded_recording() {
+        let state = RecordingState::default();
+        let err = get_merged_calls_impl(&state, 0, RelativeFilters::default()).unwrap_err();
+        assert!(err.contains("no recording loaded"));
+    }
+
+    #[test]
+    fn merged_calls_trees_are_rooted_at_the_focus_without_filters() {
+        let (state, summary) = loaded_state();
+        let focus = frame_id(&summary, "FixtureWorkload.hotCoordinator");
+        let tree = get_merged_calls_impl(&state, focus, RelativeFilters::default()).unwrap();
+
+        assert_eq!(tree.focus.0, focus);
+        assert_eq!(tree.callers.frame, Some(tree.focus));
+        assert_eq!(tree.callees.frame, Some(tree.focus));
+        assert_eq!(tree.callers.samples, tree.callees.samples);
+        assert!(tree.callers.samples > 0);
+        assert!(tree.callers.samples <= summary.sample_count);
+    }
+
+    #[test]
+    fn merged_calls_thread_filter_narrows_the_trees() {
+        let (state, summary) = loaded_state();
+        let focus = frame_id(&summary, "FixtureWorkload.hotCoordinator");
+        let unfiltered = get_merged_calls_impl(&state, focus, RelativeFilters::default()).unwrap();
+        let worker = summary
+            .threads
+            .iter()
+            .find(|t| t.name == "fixture-worker")
+            .unwrap();
+        let narrowed = get_merged_calls_impl(
+            &state,
+            focus,
+            RelativeFilters {
+                threads: Some(vec![worker.id.0]),
+                ..RelativeFilters::default()
+            },
+        )
+        .unwrap();
+
+        assert!(narrowed.callers.samples > 0);
+        assert!(narrowed.callers.samples < unfiltered.callers.samples);
+    }
+
+    #[test]
+    fn merged_calls_for_a_frame_absent_from_the_selection_has_no_samples() {
+        let (state, summary) = loaded_state();
+        let absent = summary.frames.len() as u32;
+        let tree = get_merged_calls_impl(&state, absent, RelativeFilters::default()).unwrap();
+
+        assert_eq!(tree.callers.samples, 0);
+        assert_eq!(tree.callees.samples, 0);
     }
 }
