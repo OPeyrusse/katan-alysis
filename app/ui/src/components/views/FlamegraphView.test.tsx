@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@solidjs/testing-library';
+import userEvent from '@testing-library/user-event';
 import { createSignal } from 'solid-js';
 import { FlamegraphView } from './FlamegraphView';
 import type { FlameNode, ProfileSummary } from '../../api/client';
@@ -27,11 +28,12 @@ function tree(): FlameNode {
   };
 }
 
-// Only `flamegraph` is exercised by this view.
+// Only `flamegraph` and `selectFrame` are exercised by this view.
 function flameStore(initial: FlameNode | undefined = tree()) {
   const [flamegraph, setFlamegraph] = createSignal(initial);
-  const store = { flamegraph } as unknown as ProfileStore;
-  return { store, setFlamegraph };
+  const selectFrame = vi.fn();
+  const store = { flamegraph, selectFrame } as unknown as ProfileStore;
+  return { store, setFlamegraph, selectFrame };
 }
 
 function renderView(store: ProfileStore) {
@@ -82,6 +84,15 @@ describe('FlamegraphView', () => {
 
     screen.getByRole('button', { name: 'reset zoom' }).click();
     expect(screen.queryByText(/zoomed into/)).not.toBeInTheDocument();
+  });
+
+  it('hovering a frame offers to view its merged calls', async () => {
+    const { store, selectFrame } = flameStore();
+    const surface = renderView(store);
+
+    firePointer(surface, 'pointermove', 30);
+    await userEvent.click(screen.getByRole('button', { name: 'view merged calls' }));
+    expect(selectFrame).toHaveBeenCalledWith(0);
   });
 
   it('a fresh tree from a filter change resets the zoom', () => {

@@ -121,12 +121,25 @@ export function FlamegraphView(props: { store: ProfileStore; summary: ProfileSum
               </div>
               <p class="muted flame-hover" aria-live="polite">
                 <Show when={hovered()} fallback="Hover a frame to inspect it; click to zoom in.">
-                  {(rect) =>
-                    `${labelOf(rect())} — ${rect().node.samples.toLocaleString('en-US')} samples (${(
-                      (100 * rect().node.samples) /
-                      (focus()?.samples ?? 1)
-                    ).toFixed(1)}%)`
-                  }
+                  {(rect) => (
+                    <>
+                      {`${labelOf(rect())} — ${rect().node.samples.toLocaleString('en-US')} samples (${(
+                        (100 * rect().node.samples) /
+                        (focus()?.samples ?? 1)
+                      ).toFixed(1)}%)`}
+                      {' — '}
+                      <button
+                        type="button"
+                        class="link-button"
+                        onClick={() => {
+                          const frame = rect().node.frame;
+                          if (frame !== null) props.store.selectFrame(frame);
+                        }}
+                      >
+                        view merged calls
+                      </button>
+                    </>
+                  )}
                 </Show>
               </p>
             </Show>

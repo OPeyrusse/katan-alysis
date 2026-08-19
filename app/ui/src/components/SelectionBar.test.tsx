@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { SelectionBar } from './SelectionBar';
 import { createProfileStore } from '../state/profile';
 import type { ProfileSummary } from '../api/client';
-import { emptySignals, nullInfo } from '../test/fixtures';
+import { emptyMergedCalls, emptySignals, nullInfo } from '../test/fixtures';
 
 const summary: ProfileSummary = {
   sample_count: 100,
@@ -26,6 +26,7 @@ function mockedClient() {
     getHeatmap: vi
       .fn()
       .mockResolvedValue({ column_nanos: 0, row_nanos: 0, rows: 0, columns: [], max_count: 0 }),
+    getMergedCalls: vi.fn().mockResolvedValue(emptyMergedCalls()),
     getSampleDensity: vi.fn().mockResolvedValue({ bucket_nanos: 1, counts: [1] }),
     getRecordingInfo: vi.fn().mockResolvedValue(nullInfo()),
     getOverviewSignals: vi.fn().mockResolvedValue(emptySignals()),

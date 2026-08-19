@@ -4,6 +4,7 @@ import { createProfileStore } from './profile';
 import type {
   FlameNode,
   HeatmapGrid,
+  MergedCallTree,
   ProfileSummary,
   RecentRecording,
   TopMethods,
@@ -37,6 +38,12 @@ const heatmap: HeatmapGrid = {
   max_count: 10,
 };
 
+const merged: MergedCallTree = {
+  focus: 0,
+  callers: { frame: 0, samples: 10, children: [] },
+  callees: { frame: 0, samples: 10, children: [] },
+};
+
 const recent: RecentRecording = {
   path: '/tmp/rec.jfr',
   size_bytes: 1024,
@@ -53,6 +60,7 @@ function client() {
     getTopMethods: vi.fn().mockResolvedValue(view),
     getFlamegraph: vi.fn().mockResolvedValue(flame),
     getHeatmap: vi.fn().mockResolvedValue(heatmap),
+    getMergedCalls: vi.fn().mockResolvedValue(merged),
     getSampleDensity: vi.fn().mockResolvedValue(density),
     getRecordingInfo: vi.fn().mockResolvedValue(nullInfo()),
     getOverviewSignals: vi.fn().mockResolvedValue(emptySignals()),
@@ -114,6 +122,55 @@ describe('createProfileStore', () => {
     });
   });
 
+  it('does not fetch merged calls before a method is selected', async () => {
+    await createRoot(async (dispose) => {
+      const api = client();
+      const store = createProfileStore(api);
+
+      await store.open('/tmp/rec.jfr');
+      expect(store.selectedFrame()).toBeUndefined();
+      expect(store.mergedCalls()).toBeUndefined();
+      expect(api.getMergedCalls).not.toHaveBeenCalled();
+      dispose();
+    });
+  });
+
+  it('selecting a frame fetches merged calls and switches to that view', async () => {
+    await createRoot(async (dispose) => {
+      const api = client();
+      const store = createProfileStore(api);
+
+      await store.open('/tmp/rec.jfr');
+      store.selectFrame(0);
+
+      expect(store.selectedFrame()).toBe(0);
+      expect(store.activeView()).toBe('merged-calls');
+      await vi.waitFor(() => expect(store.mergedCalls()).toEqual(merged));
+      expect(api.getMergedCalls).toHaveBeenCalledWith(0, {});
+
+      store.setFilters({ threads: [0] });
+      await vi.waitFor(() =>
+        expect(api.getMergedCalls).toHaveBeenCalledWith(0, { threads: [0] }),
+      );
+      dispose();
+    });
+  });
+
+  it('selecting a frame survives once selected, but dies with the recording', async () => {
+    await createRoot(async (dispose) => {
+      const store = createProfileStore(client());
+
+      await store.open('/a.jfr');
+      store.selectFrame(0);
+      store.setActiveView('top-methods');
+      expect(store.selectedFrame()).toBe(0);
+
+      await store.open('/b.jfr');
+      expect(store.selectedFrame()).toBeUndefined();
+      dispose();
+    });
+  });
+
   it('keeps the previous recording on failed open', async () => {
     await createRoot(async (dispose) => {
       const api = client();
@@ -153,12 +210,14 @@ describe('createProfileStore', () => {
 
       await store.open('/tmp/rec.jfr');
       store.setFilters({ threads: [0] });
+      store.selectFrame(0);
       await store.close();
 
       expect(api.closeRecording).toHaveBeenCalled();
       expect(store.summary()).toBeUndefined();
       expect(store.openedPath()).toBeUndefined();
       expect(store.filters()).toEqual({});
+      expect(store.selectedFrame()).toBeUndefined();
       expect(store.error()).toBeUndefined();
       dispose();
     });

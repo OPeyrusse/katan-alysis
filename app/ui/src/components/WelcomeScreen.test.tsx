@@ -5,7 +5,7 @@ import { WelcomeScreen } from './WelcomeScreen';
 import { createProfileStore } from '../state/profile';
 import type { Shell } from '../api/shell';
 import type { ProfileSummary, RecentRecording } from '../api/client';
-import { emptySignals, nullInfo } from '../test/fixtures';
+import { emptyMergedCalls, emptySignals, nullInfo } from '../test/fixtures';
 
 const summary: ProfileSummary = {
   sample_count: 10,
@@ -34,6 +34,7 @@ function mockedClient() {
     getHeatmap: vi
       .fn()
       .mockResolvedValue({ column_nanos: 0, row_nanos: 0, rows: 0, columns: [], max_count: 0 }),
+    getMergedCalls: vi.fn().mockResolvedValue(emptyMergedCalls()),
     getSampleDensity: vi.fn().mockResolvedValue({ bucket_nanos: 1, counts: [] }),
     getRecordingInfo: vi.fn().mockResolvedValue(nullInfo()),
     getOverviewSignals: vi.fn().mockResolvedValue(emptySignals()),

@@ -8,6 +8,7 @@ import { uniqueName } from './selections';
 import type {
   FlameNode,
   HeatmapGrid,
+  MergedCallTree,
   OverviewSignals,
   ProfileSummary,
   RecentRecording,
@@ -29,7 +30,7 @@ export const VIEWS = [
   { id: 'top-methods', label: 'Top methods', ready: true },
   { id: 'flamegraph', label: 'Flamegraph', ready: true },
   { id: 'heatmap', label: 'Heatmap', ready: true },
-  { id: 'merged-calls', label: 'Merged calls', ready: false },
+  { id: 'merged-calls', label: 'Merged calls', ready: true },
   { id: 'gc', label: 'GC', ready: false },
 ] as const;
 
@@ -58,6 +59,11 @@ export interface ProfileStore {
   setFilters: (filters: RelativeFilters) => void;
   activeView: () => ViewId;
   setActiveView: (view: ViewId) => void;
+  /** Method the merged-calls view is focused on, from top-methods or the
+   * flamegraph. Unlike the filters, it survives a filter change. */
+  selectedFrame: () => number | undefined;
+  /** Focuses the merged-calls view on `frameId` and switches to it. */
+  selectFrame: (frameId: number) => void;
   /** Saved selections of the current recording, in save order. */
   selections: () => NamedSelection[];
   /** Name of the saved selection the current filters came from, if any. */
@@ -76,6 +82,8 @@ export interface ProfileStore {
   flamegraph: Resource<FlameNode | undefined>;
   /** FlameScope grid; re-fetched, like topMethods, on every filter change. */
   heatmap: Resource<HeatmapGrid | undefined>;
+  /** Callers/callees of `selectedFrame`; `undefined` until one is picked. */
+  mergedCalls: Resource<MergedCallTree | undefined>;
   /** Whole-recording sample density; fetched once per recording. */
   density: Resource<SampleDensity | undefined>;
   /** JVM/GC/host metadata of the recording; fetched once per recording. */
@@ -95,6 +103,7 @@ type Client = Pick<
   | 'getTopMethods'
   | 'getFlamegraph'
   | 'getHeatmap'
+  | 'getMergedCalls'
   | 'getSampleDensity'
   | 'getRecordingInfo'
   | 'getOverviewSignals'
@@ -110,6 +119,7 @@ export function createProfileStore(client: Client = api): ProfileStore {
   const [error, setError] = createSignal<string>();
   const [filters, setFiltersRaw] = createSignal<RelativeFilters>({});
   const [activeView, setActiveView] = createSignal<ViewId>(DEFAULT_VIEW);
+  const [selectedFrame, setSelectedFrame] = createSignal<number>();
   const [recents, setRecents] = createSignal<RecentRecording[]>([]);
   const [selections, setSelections] = createSignal<NamedSelection[]>([]);
   const [appliedSelection, setAppliedSelection] = createSignal<string>();
@@ -143,6 +153,19 @@ export function createProfileStore(client: Client = api): ProfileStore {
     ({ filters }) => client.getHeatmap(filters),
   );
 
+  const [mergedCalls] = createResource(
+    () => {
+      const frameId = selectedFrame();
+      return summary() && frameId !== undefined ? { frameId, filters: filters() } : undefined;
+    },
+    ({ frameId, filters }) => client.getMergedCalls(frameId, filters),
+  );
+
+  const selectFrame = (frameId: number) => {
+    setSelectedFrame(frameId);
+    setActiveView('merged-calls');
+  };
+
   const [density] = createResource(
     () => summary(),
     () => client.getSampleDensity(DENSITY_BUCKETS),
@@ -172,6 +195,7 @@ export function createProfileStore(client: Client = api): ProfileStore {
       setFilters({});
       setSelections([]);
       setActiveView(DEFAULT_VIEW);
+      setSelectedFrame(undefined);
       setError(undefined);
       setRecents(await client.listRecentRecordings());
     } catch (e) {
@@ -189,6 +213,7 @@ export function createProfileStore(client: Client = api): ProfileStore {
     setOpenedPath(undefined);
     setFilters({});
     setSelections([]);
+    setSelectedFrame(undefined);
     setError(undefined);
   };
 
@@ -257,10 +282,13 @@ export function createProfileStore(client: Client = api): ProfileStore {
     setFilters,
     activeView,
     setActiveView,
+    selectedFrame,
+    selectFrame,
     recents,
     topMethods,
     flamegraph,
     heatmap,
+    mergedCalls,
     density,
     info,
     overviewSignals,

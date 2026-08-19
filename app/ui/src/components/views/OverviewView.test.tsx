@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@solidjs/testing-library';
 import { OverviewView } from './OverviewView';
 import { createProfileStore } from '../../state/profile';
-import { emptySignals, nullInfo } from '../../test/fixtures';
+import { emptyMergedCalls, emptySignals, nullInfo } from '../../test/fixtures';
 import type {
   OverviewSignals,
   ProfileSummary,
@@ -60,6 +60,7 @@ function mockedClient(overrides?: {
     getHeatmap: vi
       .fn()
       .mockResolvedValue({ column_nanos: 0, row_nanos: 0, rows: 0, columns: [], max_count: 0 }),
+    getMergedCalls: vi.fn().mockResolvedValue(emptyMergedCalls()),
     getSampleDensity: vi.fn().mockResolvedValue({ bucket_nanos: 1, counts: [1] }),
     getRecordingInfo: vi.fn().mockResolvedValue(overrides?.info ?? info),
     getOverviewSignals: vi.fn().mockResolvedValue(overrides?.signals ?? signals),

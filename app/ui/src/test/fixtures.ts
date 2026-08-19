@@ -1,6 +1,6 @@
 // Shared test fixtures for the overview data: a recording with no
 // metadata and no signals — the minimal-recording shape.
-import type { OverviewSignals, RecordingInfo } from '../api/client';
+import type { MergedCallTree, OverviewSignals, RecordingInfo } from '../api/client';
 
 export function emptySignals(): OverviewSignals {
   return {
@@ -29,5 +29,13 @@ export function nullInfo(): RecordingInfo {
     xms: null,
     max_direct_memory: null,
     debug_non_safepoints: null,
+  };
+}
+
+export function emptyMergedCalls(): MergedCallTree {
+  return {
+    focus: 0,
+    callers: { frame: 0, samples: 0, children: [] },
+    callees: { frame: 0, samples: 0, children: [] },
   };
 }
