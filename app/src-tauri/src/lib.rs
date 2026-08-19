@@ -30,6 +30,7 @@ pub fn run() {
             commands::get_top_methods,
             commands::get_flamegraph,
             commands::get_heatmap,
+            commands::get_merged_calls,
             commands::get_sample_density,
             commands::get_recording_info,
             commands::get_overview_signals,
