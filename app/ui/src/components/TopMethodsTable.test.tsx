@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@solidjs/testing-library';
+import userEvent from '@testing-library/user-event';
 import { TopMethodsTable } from './TopMethodsTable';
 import type { Frame, TopMethods } from '../api/client';
 
@@ -43,5 +44,18 @@ describe('TopMethodsTable', () => {
       />
     ));
     expect(screen.getByRole('row', { name: /#7/ })).toBeInTheDocument();
+  });
+
+  it('renders method names as plain text without a selection handler', () => {
+    render(() => <TopMethodsTable frames={frames} view={view} />);
+    expect(screen.queryByRole('button', { name: 'App.hotLoop' })).not.toBeInTheDocument();
+  });
+
+  it('clicking a method name selects its frame', async () => {
+    const onSelectFrame = vi.fn();
+    render(() => <TopMethodsTable frames={frames} view={view} onSelectFrame={onSelectFrame} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'App.hotLoop' }));
+    expect(onSelectFrame).toHaveBeenCalledWith(1);
   });
 });

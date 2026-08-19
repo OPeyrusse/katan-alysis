@@ -4,7 +4,13 @@ import userEvent from '@testing-library/user-event';
 import { App } from './App';
 import { createProfileStore } from './state/profile';
 import type { Shell } from './api/shell';
-import type { FlameNode, HeatmapGrid, ProfileSummary, TopMethods } from './api/client';
+import type {
+  FlameNode,
+  HeatmapGrid,
+  MergedCallTree,
+  ProfileSummary,
+  TopMethods,
+} from './api/client';
 import { emptySignals, nullInfo } from './test/fixtures';
 
 const summary: ProfileSummary = {
@@ -46,6 +52,12 @@ const heatmap: HeatmapGrid = {
   max_count: 0,
 };
 
+const mergedCalls: MergedCallTree = {
+  focus: 0,
+  callers: { frame: 0, samples: 480, children: [] },
+  callees: { frame: 0, samples: 480, children: [{ frame: 1, samples: 420, children: [] }] },
+};
+
 function mockedClient() {
   return {
     openRecording: vi.fn().mockResolvedValue(summary),
@@ -53,6 +65,7 @@ function mockedClient() {
     getTopMethods: vi.fn().mockResolvedValue(topMethods),
     getFlamegraph: vi.fn().mockResolvedValue(flamegraph),
     getHeatmap: vi.fn().mockResolvedValue(heatmap),
+    getMergedCalls: vi.fn().mockResolvedValue(mergedCalls),
     getSampleDensity: vi.fn().mockResolvedValue({ bucket_nanos: 1, counts: [1, 2, 1] }),
     getRecordingInfo: vi.fn().mockResolvedValue(nullInfo()),
     getOverviewSignals: vi.fn().mockResolvedValue(emptySignals()),
@@ -127,7 +140,28 @@ describe('App', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Heatmap' }));
     expect(screen.getByRole('region', { name: 'Heatmap view' })).toBeInTheDocument();
 
-    expect(screen.getByRole('button', { name: 'Merged calls' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: 'Merged calls' }));
+    expect(screen.getByRole('region', { name: 'Merged calls view' })).toBeInTheDocument();
+
+    expect(screen.getByRole('button', { name: 'GC' })).toBeDisabled();
+  });
+
+  it('selecting a method from top-methods opens the merged-calls view on it', async () => {
+    const { client } = await openedTopMethods();
+
+    await userEvent.click(screen.getByRole('button', { name: 'FixtureWorkload.hotCoordinator' }));
+
+    expect(screen.getByRole('region', { name: 'Merged calls view' })).toBeInTheDocument();
+    await waitFor(() => expect(client.getMergedCalls).toHaveBeenCalledWith(0, {}));
+    expect(screen.getByText(/Focused on/)).toHaveTextContent('FixtureWorkload.hotCoordinator');
+  });
+
+  it('merged calls shows a prompt before any method is selected', async () => {
+    await openedTopMethods();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Merged calls' }));
+
+    expect(screen.getByText(/Select a method from Top methods or the Flamegraph/)).toBeInTheDocument();
   });
 
   it('closes the recording back to the welcome screen', async () => {

@@ -22,11 +22,13 @@
 --     into one-second columns of twenty-millisecond rows so a
 --     periodic pattern lines up down the columns, with the analyst
 --     able to brush a rectangle of cells into a time window
+--   - the merged callers/callees view: callers and callees of one
+--     method the analyst focuses on, reached by selecting it from
+--     top-methods or the flamegraph
 --   - the boundaries the analyst interacts with
 -- Excludes:
 --   - the JFR binary format and its parsing (jfrs library, external)
 --   - transport (Tauri IPC), rendering technology and packaging
---   - views not yet built: merged call tree
 --   - several recordings open at once. It is a decided direction, not
 --     an open question: the workspace will hold more than one profile
 --     so recordings can be compared. Until that work starts the spec
@@ -235,6 +237,11 @@ entity AnalysisWorkspace {
     -- leaves an active time window alone.
     selected_threads: Set<ProfiledThread>?
     selected_window: TimeWindow?
+    -- The method the merged-calls view is focused on, from top-methods
+    -- or the flamegraph. Unlike the filters, selecting a method is not
+    -- itself a filter: it survives a filter change instead of resetting
+    -- with it.
+    focused_frame: Frame?
     -- Why the last attempt to open a recording failed, if it did.
     last_error: String?
     -- What the welcome screen lists: recordings whose last open
@@ -260,6 +267,10 @@ entity AnalysisWorkspace {
     invariant FiltersRequireARecording {
         not has_recording
             implies selected_threads = null and selected_window = null
+    }
+
+    invariant FocusRequiresARecording {
+        not has_recording implies focused_frame = null
     }
 
     invariant SelectionsRequireARecording {
@@ -302,6 +313,7 @@ rule LoadRecording {
         -- one would silently narrow a different data set.
         workspace.selected_threads = null
         workspace.selected_window = null
+        workspace.focused_frame = null
         workspace.last_error = null
         -- Saved selections named windows of the previous recording;
         -- they would silently describe a different data set here.
@@ -337,6 +349,7 @@ rule CloseRecording {
         workspace.profile = null
         workspace.selected_threads = null
         workspace.selected_window = null
+        workspace.focused_frame = null
         workspace.saved_selections = []
         workspace.last_error = null
 }
@@ -388,6 +401,21 @@ rule WidenToWholeRecording {
     when: AnalystClearsTimeWindow(analyst)
     requires: workspace.selected_window != null
     ensures: workspace.selected_window = null
+}
+
+rule SelectMethod {
+    when: AnalystSelectsMethod(analyst, frame)
+    requires: workspace.has_recording
+    ensures:
+        -- Selecting a different method replaces the focus outright; the
+        -- analyst does not have to clear it first.
+        workspace.focused_frame = frame
+}
+
+rule ClearMethodSelection {
+    when: AnalystClearsMethodSelection(analyst)
+    requires: workspace.focused_frame != null
+    ensures: workspace.focused_frame = null
 }
 
 rule SaveCurrentSelection {
@@ -530,6 +558,7 @@ surface RecordingLoader {
         TopMethodsView() when workspace.has_recording
         FlamegraphView() when workspace.has_recording
         HeatmapView() when workspace.has_recording
+        MergedCallsView() when workspace.has_recording
 }
 
 -- The landing view of a freshly opened recording: what the recording
@@ -575,6 +604,7 @@ surface RecordingOverview {
         TopMethodsView() when workspace.has_recording
         FlamegraphView() when workspace.has_recording
         HeatmapView() when workspace.has_recording
+        MergedCallsView() when workspace.has_recording
 }
 
 surface TopMethodsView {
@@ -619,6 +649,10 @@ surface TopMethodsView {
             when workspace.saved_selections.count > 0
         AnalystDeletesSelection(analyst, selection)
             when workspace.saved_selections.count > 0
+        -- Picking a method here is the "inspect this" gesture: it hands
+        -- over to the merged-calls view, focused on it.
+        AnalystSelectsMethod(analyst, frame)
+            when workspace.has_recording
 
     @guarantee RowsAreOrderedBySelfTime
         -- Rows are ordered by decreasing self count, and that order is
@@ -659,6 +693,9 @@ surface TopMethodsView {
         -- The analyst reads this table to find where time goes: a high
         -- self count means the method itself is hot, a high total with
         -- a low self means it is the entry point of something hot.
+
+    related:
+        MergedCallsView() when workspace.has_recording
 }
 
 -- The call-tree view: every distinct stack the current selection
@@ -703,6 +740,10 @@ surface FlamegraphView {
             when workspace.saved_selections.count > 0
         AnalystDeletesSelection(analyst, selection)
             when workspace.saved_selections.count > 0
+        -- Picking a frame here is the same "inspect this" gesture as in
+        -- top-methods: it hands over to the merged-calls view.
+        AnalystSelectsMethod(analyst, frame)
+            when workspace.has_recording
 
     @guarantee RecursionIsShownNotCollapsed
         -- A method that calls itself appears once per depth it occurs
@@ -730,6 +771,9 @@ surface FlamegraphView {
         -- The timeline strip and thread panel are the same selection
         -- chrome as top-methods: narrowing the selection here narrows
         -- it there too, and vice versa.
+
+    related:
+        MergedCallsView() when workspace.has_recording
 }
 
 -- The FlameScope-style heatmap: sample density over the whole recording,
@@ -797,6 +841,80 @@ surface HeatmapView {
         -- versa. A time window already selected elsewhere still shows
         -- against the whole-recording grid, per HeatmapSpansTheWholeRecording,
         -- so the analyst can see where it sits before adjusting it.
+}
+
+-- Callers and callees merged around one focused method: complements
+-- top-methods and the flamegraph by showing what leads into a hot
+-- method and what it leads to, without the rest of the call tree
+-- around it. The analyst reaches it by selecting a method from
+-- top-methods or the flamegraph.
+surface MergedCallsView {
+    facing analyst: Analyst
+
+    exposes:
+        workspace.selection_size
+        workspace.focused_frame
+        -- The selection chrome, shared with the other views.
+        workspace.selected_threads
+        workspace.selected_window
+        for thread in workspace.profile.threads:
+            thread.name
+            thread.sample_count
+        for selection in workspace.saved_selections:
+            selection.name
+
+    provides:
+        AnalystSelectsMethod(analyst, frame)
+            when workspace.has_recording
+        AnalystClearsMethodSelection(analyst)
+            when workspace.focused_frame != null
+        AnalystSelectsThreads(analyst, threads)
+            when workspace.has_recording
+        AnalystClearsThreadSelection(analyst)
+            when workspace.selected_threads != null
+        AnalystSelectsTimeWindow(analyst, window)
+            when workspace.has_recording
+        AnalystClearsTimeWindow(analyst)
+            when workspace.selected_window != null
+        AnalystSavesSelection(analyst)
+            when workspace.selected_threads != null
+                or workspace.selected_window != null
+        AnalystAppliesSelection(analyst, selection)
+            when workspace.saved_selections.count > 0
+        AnalystClearsSelection(analyst)
+            when workspace.has_recording
+        AnalystRenamesSelection(analyst, selection, wanted)
+            when workspace.saved_selections.count > 0
+        AnalystDeletesSelection(analyst, selection)
+            when workspace.saved_selections.count > 0
+
+    @guarantee FocusedFrameRootsBothTrees
+        -- Both trees are rooted at the focused method: its sample count
+        -- is the same figure the flat profile calls total_samples, read
+        -- once instead of once per view.
+
+    @guarantee CallersAndCalleesSplitAtTheFirstOccurrence
+        -- A stack that recurses through the focused method is split at
+        -- its first occurrence: everything before it feeds the callers
+        -- tree, everything from that occurrence on feeds the callees
+        -- tree, each merged the way the flamegraph merges stacks —
+        -- callers by shared suffix walking up, callees by shared prefix
+        -- walking down.
+
+    @guarantee SelectionSurvivesFilterChanges
+        -- Selecting a method is not a filter: narrowing or widening the
+        -- thread or time selection re-fetches both trees for the same
+        -- focused method instead of clearing it, unlike zooming into
+        -- the flamegraph.
+
+    @guidance
+        -- The selection chrome is the same as the other views: narrowing
+        -- it here narrows it everywhere, and vice versa.
+
+    @guidance
+        -- Selecting a different method from top-methods or the
+        -- flamegraph replaces the focused method rather than requiring
+        -- an explicit clear first.
 }
 
 ------------------------------------------------------------

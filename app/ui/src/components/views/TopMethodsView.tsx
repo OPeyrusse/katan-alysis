@@ -13,7 +13,11 @@ export function TopMethodsView(props: { store: ProfileStore; summary: ProfileSum
             <p class="selection-size">
               {view().total_samples.toLocaleString('en-US')} samples in selection
             </p>
-            <TopMethodsTable frames={props.summary.frames} view={view()} />
+            <TopMethodsTable
+              frames={props.summary.frames}
+              view={view()}
+              onSelectFrame={props.store.selectFrame}
+            />
           </>
         )}
       </Show>
