@@ -8,7 +8,9 @@
 use serde::{Deserialize, Serialize};
 
 /// Index into a profile's frame dictionary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
 #[serde(transparent)]
 pub struct FrameId(pub u32);
 
@@ -269,6 +271,27 @@ pub struct FlameNode {
     pub children: Vec<FlameNode>,
 }
 
+/// Callers and callees merged around one focus method: the analyst selects
+/// a method from top-methods or the flamegraph, and this splits every
+/// stack that reaches it into what led into it and what it led to.
+///
+/// A stack that recurses through `focus` is split at its first occurrence,
+/// the same rule [`MethodStats::total_samples`] uses for recursion — once
+/// per stack, not once per depth. Both trees are therefore rooted at
+/// `focus` with the same `samples`, one built by walking each stack's
+/// prefix backwards (immediate callers first), the other by walking its
+/// suffix forwards (immediate callees first) — the same merge the
+/// flamegraph does, just started at `focus` instead of the stack's root.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MergedCallTree {
+    /// The method the analyst selected.
+    pub focus: FrameId,
+    /// Rooted at `focus`; children are its immediate callers.
+    pub callers: FlameNode,
+    /// Rooted at `focus`; children are its immediate callees.
+    pub callees: FlameNode,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,5 +492,41 @@ mod tests {
         let json = serde_json::to_string(&tree).unwrap();
         let back: FlameNode = serde_json::from_str(&json).unwrap();
         assert_eq!(back, tree);
+    }
+
+    #[test]
+    fn merged_call_tree_round_trips_through_json() {
+        let tree = MergedCallTree {
+            focus: FrameId(1),
+            callers: FlameNode {
+                frame: Some(FrameId(1)),
+                samples: 5,
+                children: vec![FlameNode {
+                    frame: Some(FrameId(0)),
+                    samples: 5,
+                    children: vec![],
+                }],
+            },
+            callees: FlameNode {
+                frame: Some(FrameId(1)),
+                samples: 5,
+                children: vec![FlameNode {
+                    frame: Some(FrameId(2)),
+                    samples: 3,
+                    children: vec![],
+                }],
+            },
+        };
+        let json = serde_json::to_string(&tree).unwrap();
+        let back: MergedCallTree = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, tree);
+    }
+
+    #[test]
+    fn empty_merged_call_tree_is_the_default() {
+        let tree = MergedCallTree::default();
+        assert_eq!(tree.focus, FrameId(0));
+        assert_eq!(tree.callers, FlameNode::default());
+        assert_eq!(tree.callees, FlameNode::default());
     }
 }
