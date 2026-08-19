@@ -52,6 +52,20 @@ export interface FlameNode {
   children: FlameNode[];
 }
 
+/**
+ * FlameScope-style density grid: `columns[i][j]` is the sample count of row
+ * `j` of column `i`. Columns always span the whole recording — column 0
+ * sits at recording-relative nanosecond 0 — so a cell's time only depends
+ * on `column_nanos`/`row_nanos`, never on the current filters.
+ */
+export interface HeatmapGrid {
+  column_nanos: number;
+  row_nanos: number;
+  rows: number;
+  columns: number[][];
+  max_count: number;
+}
+
 // An empty selection is not a filter: an empty thread list, or a range
 // holding no instant, widens back to the whole recording. The UI can send
 // the selection as-is — it never has to special-case "nothing selected".
@@ -139,6 +153,10 @@ export function getTopMethods(filters: RelativeFilters): Promise<TopMethods> {
 
 export function getFlamegraph(filters: RelativeFilters): Promise<FlameNode> {
   return invoke('get_flamegraph', { filters });
+}
+
+export function getHeatmap(filters: RelativeFilters): Promise<HeatmapGrid> {
+  return invoke('get_heatmap', { filters });
 }
 
 export function getSampleDensity(buckets: number): Promise<SampleDensity> {
