@@ -41,6 +41,17 @@ export interface TopMethods {
   total_samples: number;
 }
 
+/**
+ * One node of the flamegraph tree; `frame` is `null` only for the
+ * synthetic root above every stack. Children are pre-sorted by
+ * decreasing `samples`.
+ */
+export interface FlameNode {
+  frame: number | null;
+  samples: number;
+  children: FlameNode[];
+}
+
 // An empty selection is not a filter: an empty thread list, or a range
 // holding no instant, widens back to the whole recording. The UI can send
 // the selection as-is — it never has to special-case "nothing selected".
@@ -124,6 +135,10 @@ export function closeRecording(): Promise<void> {
 
 export function getTopMethods(filters: RelativeFilters): Promise<TopMethods> {
   return invoke('get_top_methods', { filters });
+}
+
+export function getFlamegraph(filters: RelativeFilters): Promise<FlameNode> {
+  return invoke('get_flamegraph', { filters });
 }
 
 export function getSampleDensity(buckets: number): Promise<SampleDensity> {
