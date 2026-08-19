@@ -196,6 +196,8 @@ workflows:
             branches:
               ignore: main
 
+  packaging:
+    jobs:
       # Optional tauri-build on PRs: a manual approval gate lets reviewers
       # trigger the expensive full build without running it automatically.
       - approve-tauri-build:
