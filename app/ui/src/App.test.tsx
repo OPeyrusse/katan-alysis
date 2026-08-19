@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { App } from './App';
 import { createProfileStore } from './state/profile';
 import type { Shell } from './api/shell';
-import type { ProfileSummary, TopMethods } from './api/client';
+import type { FlameNode, ProfileSummary, TopMethods } from './api/client';
 import { emptySignals, nullInfo } from './test/fixtures';
 
 const summary: ProfileSummary = {
@@ -29,11 +29,21 @@ const topMethods: TopMethods = {
   total_samples: 504,
 };
 
+const flamegraph: FlameNode = {
+  frame: null,
+  samples: 504,
+  children: [
+    { frame: 0, samples: 480, children: [{ frame: 1, samples: 420, children: [] }] },
+    { frame: 1, samples: 24, children: [] },
+  ],
+};
+
 function mockedClient() {
   return {
     openRecording: vi.fn().mockResolvedValue(summary),
     closeRecording: vi.fn().mockResolvedValue(undefined),
     getTopMethods: vi.fn().mockResolvedValue(topMethods),
+    getFlamegraph: vi.fn().mockResolvedValue(flamegraph),
     getSampleDensity: vi.fn().mockResolvedValue({ bucket_nanos: 1, counts: [1, 2, 1] }),
     getRecordingInfo: vi.fn().mockResolvedValue(nullInfo()),
     getOverviewSignals: vi.fn().mockResolvedValue(emptySignals()),
@@ -102,7 +112,9 @@ describe('App', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Top methods' }));
     expect(screen.getByRole('table')).toBeInTheDocument();
 
-    expect(screen.getByRole('button', { name: 'Flamegraph' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: 'Flamegraph' }));
+    expect(screen.getByRole('region', { name: 'Flamegraph view' })).toBeInTheDocument();
+
     expect(screen.getByRole('button', { name: 'Heatmap' })).toBeDisabled();
   });
 

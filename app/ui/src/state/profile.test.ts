@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createRoot } from 'solid-js';
 import { createProfileStore } from './profile';
-import type { ProfileSummary, RecentRecording, TopMethods } from '../api/client';
+import type { FlameNode, ProfileSummary, RecentRecording, TopMethods } from '../api/client';
 import { emptySignals, nullInfo } from '../test/fixtures';
 
 const summary: ProfileSummary = {
@@ -15,6 +15,12 @@ const summary: ProfileSummary = {
 const view: TopMethods = {
   rows: [[0, { self_samples: 10, total_samples: 10 }]],
   total_samples: 10,
+};
+
+const flame: FlameNode = {
+  frame: null,
+  samples: 10,
+  children: [{ frame: 0, samples: 10, children: [] }],
 };
 
 const recent: RecentRecording = {
@@ -31,6 +37,7 @@ function client() {
     openRecording: vi.fn().mockResolvedValue(summary),
     closeRecording: vi.fn().mockResolvedValue(undefined),
     getTopMethods: vi.fn().mockResolvedValue(view),
+    getFlamegraph: vi.fn().mockResolvedValue(flame),
     getSampleDensity: vi.fn().mockResolvedValue(density),
     getRecordingInfo: vi.fn().mockResolvedValue(nullInfo()),
     getOverviewSignals: vi.fn().mockResolvedValue(emptySignals()),

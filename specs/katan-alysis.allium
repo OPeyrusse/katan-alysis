@@ -3,7 +3,7 @@
 --
 -- Scope: the JFR analysis desktop application — opening a recording,
 -- narrowing it with the cross-cutting filters, and reading the flat
--- profile ("top methods") view.
+-- profile ("top methods") and flamegraph views.
 --
 -- Includes:
 --   - the outcome of opening a recording (loaded summary vs. error)
@@ -15,11 +15,14 @@
 --     the overview that presents it with the recorded signals
 --   - the thread and time filters, applied before any aggregation
 --   - the top-methods aggregation (self / total sample counts)
+--   - the flamegraph: the same selection's call stacks merged into a
+--     tree by shared prefix, preserving recursion instead of
+--     collapsing it, with the analyst able to zoom into a subtree
 --   - the boundaries the analyst interacts with
 -- Excludes:
 --   - the JFR binary format and its parsing (jfrs library, external)
 --   - transport (Tauri IPC), rendering technology and packaging
---   - views not yet built: flamegraph, heatmap, merged call tree
+--   - views not yet built: heatmap, merged call tree
 --   - several recordings open at once. It is a decided direction, not
 --     an open question: the workspace will hold more than one profile
 --     so recordings can be compared. Until that work starts the spec
@@ -136,6 +139,13 @@ entity Stack {
 
     leaf: frames.last
     distinct_frames: frames.unique
+
+    -- Every sample that ran this exact call stack.
+    samples: Sample with stack = this
+    -- Relative to the current selection, like Frame's counts: the
+    -- flamegraph's span widths are proportional to this.
+    selected_samples: samples where is_selected
+    selected_sample_count: selected_samples.count
 }
 
 -- A thread observed in the recording.
@@ -236,6 +246,12 @@ entity AnalysisWorkspace {
     -- The denominator of every percentage the analyst reads.
     selection_size: selected_samples.count
     top_methods: profile.frames where is_visible
+    -- The distinct call stacks reached by the current selection, each
+    -- with its own selected sample count: the raw material the
+    -- flamegraph merges into a tree by shared prefix. Unlike
+    -- top_methods, a stack's frames are not deduplicated — a method
+    -- that recurses appears once per depth it occurs at.
+    selected_stacks: selected_samples -> stack
 
     invariant FiltersRequireARecording {
         not has_recording
@@ -508,6 +524,7 @@ surface RecordingLoader {
     related:
         RecordingOverview() when workspace.has_recording
         TopMethodsView() when workspace.has_recording
+        FlamegraphView() when workspace.has_recording
 }
 
 -- The landing view of a freshly opened recording: what the recording
@@ -551,6 +568,7 @@ surface RecordingOverview {
 
     related:
         TopMethodsView() when workspace.has_recording
+        FlamegraphView() when workspace.has_recording
 }
 
 surface TopMethodsView {
@@ -635,6 +653,77 @@ surface TopMethodsView {
         -- The analyst reads this table to find where time goes: a high
         -- self count means the method itself is hot, a high total with
         -- a low self means it is the entry point of something hot.
+}
+
+-- The call-tree view: every distinct stack the current selection
+-- reaches, merged by shared prefix into nested spans sized by sample
+-- count. Complements top-methods: where the flat profile counts a
+-- method once per sample no matter how often it recurses, the
+-- flamegraph shows every occurrence at the depth it happened.
+surface FlamegraphView {
+    facing analyst: Analyst
+
+    exposes:
+        workspace.selection_size
+        -- The selection chrome, shared with top-methods.
+        workspace.selected_threads
+        workspace.selected_window
+        for thread in workspace.profile.threads:
+            thread.name
+            thread.sample_count
+        for selection in workspace.saved_selections:
+            selection.name
+        for stack in workspace.selected_stacks:
+            stack.frames
+            stack.selected_sample_count
+
+    provides:
+        AnalystSelectsThreads(analyst, threads)
+            when workspace.has_recording
+        AnalystClearsThreadSelection(analyst)
+            when workspace.selected_threads != null
+        AnalystSelectsTimeWindow(analyst, window)
+            when workspace.has_recording
+        AnalystClearsTimeWindow(analyst)
+            when workspace.selected_window != null
+        AnalystSavesSelection(analyst)
+            when workspace.selected_threads != null
+                or workspace.selected_window != null
+        AnalystAppliesSelection(analyst, selection)
+            when workspace.saved_selections.count > 0
+        AnalystClearsSelection(analyst)
+            when workspace.has_recording
+        AnalystRenamesSelection(analyst, selection, wanted)
+            when workspace.saved_selections.count > 0
+        AnalystDeletesSelection(analyst, selection)
+            when workspace.saved_selections.count > 0
+
+    @guarantee RecursionIsShownNotCollapsed
+        -- A method that calls itself appears once per depth it occurs
+        -- at, nested inside its own span, rather than merged into one
+        -- count the way the flat profile merges it.
+
+    @guarantee SpanWidthIsSampleShare
+        -- Every span's width is proportional to the selected samples
+        -- whose stack passes through it, and a span never spans less
+        -- width than the spans nested inside it.
+
+    @guarantee ZoomingIsLocalToTheView
+        -- Clicking a span focuses the tree on it: that span becomes
+        -- the new top-level span and its ancestors are hidden. Zooming
+        -- narrows what is drawn from the tree already fetched; it
+        -- changes neither the thread nor the time selection, so it
+        -- never triggers a new fetch on its own.
+
+    @guarantee ZoomResetsWithTheSelection
+        -- Changing the thread or time selection fetches a new tree and
+        -- clears any zoom: the span that was focused belonged to the
+        -- previous selection and may not exist in the new one.
+
+    @guidance
+        -- The timeline strip and thread panel are the same selection
+        -- chrome as top-methods: narrowing the selection here narrows
+        -- it there too, and vice versa.
 }
 
 ------------------------------------------------------------
