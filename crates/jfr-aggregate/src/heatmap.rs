@@ -2,11 +2,13 @@
 //! recording time) and row (position within that span), so a periodic
 //! pattern lines up in the same rows across columns.
 //!
-//! Unlike [`super::density::sample_density`] — deliberately unfiltered,
-//! since it draws the context strip under the brush — this view follows
-//! the current selection like top-methods and the flamegraph: filters are
-//! applied before aggregation, and the grid spans only the filtered
-//! samples.
+//! Columns always span the whole recording, like
+//! [`super::density::sample_density`] and for the same reason — this is
+//! the surface the analyst brushes a time window on, so it needs the whole
+//! recording as context. Filters still apply, unlike the density strip:
+//! they narrow which samples populate a cell, never the grid's shape, so a
+//! selection stays visible against the rest of the recording instead of
+//! disappearing into a regenerated grid.
 
 use jfr_model::{Filters, HeatmapGrid, Profile};
 
@@ -18,22 +20,18 @@ const ROWS: usize = (COLUMN_NANOS / ROW_NANOS) as usize;
 
 /// Buckets the filtered samples into the FlameScope grid.
 pub fn heatmap(profile: &Profile, filters: &Filters) -> HeatmapGrid {
-    let filtered: Vec<i64> = profile
-        .samples
-        .iter()
-        .filter(|s| filters.accepts(s))
-        .map(|s| s.ts_nanos)
-        .collect();
-    let (Some(&start), Some(&end)) = (filtered.first(), filtered.last()) else {
+    let Some((start, end)) = profile.time_range_nanos() else {
         return HeatmapGrid::default();
     };
 
+    // Half-open columns over an inclusive sample range: stretch the span by
+    // one nanosecond so the last sample lands inside the last column.
     let span = end - start + 1;
     let column_count = ((span + COLUMN_NANOS - 1) / COLUMN_NANOS) as usize;
     let mut columns = vec![vec![0u64; ROWS]; column_count];
     let mut max_count = 0u64;
-    for ts_nanos in filtered {
-        let offset = ts_nanos - start;
+    for sample in profile.samples.iter().filter(|s| filters.accepts(s)) {
+        let offset = sample.ts_nanos - start;
         let column = (offset / COLUMN_NANOS) as usize;
         let row = ((offset % COLUMN_NANOS) / ROW_NANOS) as usize;
         let cell = &mut columns[column][row];
@@ -112,16 +110,24 @@ mod tests {
     }
 
     #[test]
-    fn columns_are_relative_to_the_first_filtered_sample() {
-        let profile = profile_with_samples(&[1_000_000_000, 1_000_000_000 + COLUMN_NANOS]);
-        let grid = heatmap(&profile, &Filters::default());
-        assert_eq!(grid.columns.len(), 2);
+    fn columns_span_the_whole_recording_regardless_of_the_time_filter() {
+        let profile = profile_with_samples(&[0, COLUMN_NANOS, 2 * COLUMN_NANOS]);
+        let filters = Filters {
+            time_range_nanos: Some((0, COLUMN_NANOS)),
+            ..Filters::default()
+        };
+        let grid = heatmap(&profile, &filters);
+
+        // The grid keeps its full three-column shape...
+        assert_eq!(grid.columns.len(), 3);
+        // ...only the first column holds a sample.
         assert_eq!(grid.columns[0][0], 1);
-        assert_eq!(grid.columns[1][0], 1);
+        assert_eq!(grid.columns[1][0], 0);
+        assert_eq!(grid.columns[2][0], 0);
     }
 
     #[test]
-    fn thread_filter_restricts_the_grid() {
+    fn thread_filter_narrows_the_counts_not_the_grid() {
         let mut profile = profile_with_samples(&[0, 0]);
         profile.samples[1].thread = ThreadId(1);
         let filters = Filters {
@@ -129,21 +135,8 @@ mod tests {
             ..Filters::default()
         };
         let grid = heatmap(&profile, &filters);
-        let total: u64 = grid.columns.iter().flatten().sum();
-        assert_eq!(total, 1);
-    }
-
-    #[test]
-    fn time_filter_restricts_the_grid() {
-        let profile = profile_with_samples(&[0, 10, COLUMN_NANOS]);
-        let filters = Filters {
-            time_range_nanos: Some((0, COLUMN_NANOS)),
-            ..Filters::default()
-        };
-        let grid = heatmap(&profile, &filters);
         assert_eq!(grid.columns.len(), 1);
-        let total: u64 = grid.columns.iter().flatten().sum();
-        assert_eq!(total, 2);
+        assert_eq!(grid.columns[0][0], 1);
     }
 
     #[test]
