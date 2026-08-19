@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createRoot } from 'solid-js';
 import { createProfileStore } from './profile';
-import type { FlameNode, ProfileSummary, RecentRecording, TopMethods } from '../api/client';
+import type {
+  FlameNode,
+  HeatmapGrid,
+  ProfileSummary,
+  RecentRecording,
+  TopMethods,
+} from '../api/client';
 import { emptySignals, nullInfo } from '../test/fixtures';
 
 const summary: ProfileSummary = {
@@ -23,6 +29,14 @@ const flame: FlameNode = {
   children: [{ frame: 0, samples: 10, children: [] }],
 };
 
+const heatmap: HeatmapGrid = {
+  column_nanos: 1_000_000_000,
+  row_nanos: 20_000_000,
+  rows: 1,
+  columns: [[10]],
+  max_count: 10,
+};
+
 const recent: RecentRecording = {
   path: '/tmp/rec.jfr',
   size_bytes: 1024,
@@ -38,6 +52,7 @@ function client() {
     closeRecording: vi.fn().mockResolvedValue(undefined),
     getTopMethods: vi.fn().mockResolvedValue(view),
     getFlamegraph: vi.fn().mockResolvedValue(flame),
+    getHeatmap: vi.fn().mockResolvedValue(heatmap),
     getSampleDensity: vi.fn().mockResolvedValue(density),
     getRecordingInfo: vi.fn().mockResolvedValue(nullInfo()),
     getOverviewSignals: vi.fn().mockResolvedValue(emptySignals()),
@@ -80,6 +95,21 @@ describe('createProfileStore', () => {
 
       store.setFilters({ threads: [0] });
       await vi.waitFor(() => expect(api.getTopMethods).toHaveBeenCalledWith({ threads: [0] }));
+      dispose();
+    });
+  });
+
+  it('fetches the heatmap and refetches it on filter change', async () => {
+    await createRoot(async (dispose) => {
+      const api = client();
+      const store = createProfileStore(api);
+
+      await store.open('/tmp/rec.jfr');
+      await vi.waitFor(() => expect(store.heatmap()).toEqual(heatmap));
+      expect(api.getHeatmap).toHaveBeenCalledWith({});
+
+      store.setFilters({ threads: [0] });
+      await vi.waitFor(() => expect(api.getHeatmap).toHaveBeenCalledWith({ threads: [0] }));
       dispose();
     });
   });

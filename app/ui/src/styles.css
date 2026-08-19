@@ -503,3 +503,20 @@ thead th {
   font-size: 0.85em;
   min-height: 1.2em;
 }
+
+.heatmap-surface {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: crosshair;
+}
+
+.heatmap-surface canvas {
+  display: block;
+  width: 100%;
+}
+
+.heatmap-hover {
+  font-size: 0.85em;
+  min-height: 1.2em;
+}
