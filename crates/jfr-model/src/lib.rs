@@ -229,9 +229,13 @@ pub struct TopMethods {
 /// FlameScope-style density grid: samples bucketed by column (a fixed span
 /// of recording time, e.g. one second) and row (position within that span,
 /// e.g. a 20ms slice) so that a periodic pattern lines up in the same rows
-/// from one column to the next. Columns span only the filtered samples —
-/// like every other view, the grid follows the current selection rather
-/// than always covering the whole recording.
+/// from one column to the next.
+///
+/// Columns always span the whole recording — like [`SampleDensity`], for
+/// the same reason: this is where the analyst brushes a time window, so it
+/// needs the surrounding context to show where the current selection sits.
+/// Unlike `SampleDensity`, filters still apply: thread and time narrow
+/// which samples populate a cell, but never the grid's shape.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeatmapGrid {
     /// Width of one column, in nanoseconds.
