@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use jfr_model::{
-    Filters, Frame, GcPause, Profile, RecordingInfo, SampleDensity, ThreadId, ThreadInfo,
-    TimePoint, TopMethods,
+    Filters, FlameNode, Frame, GcPause, Profile, RecordingInfo, SampleDensity, ThreadId,
+    ThreadInfo, TimePoint, TopMethods,
 };
 use serde::{Deserialize, Serialize};
 
@@ -84,6 +84,16 @@ pub fn get_top_methods_impl(
     let profile = guard.as_ref().ok_or("no recording loaded")?;
     let filters = to_absolute(profile, filters);
     Ok(jfr_aggregate::top_methods(profile, &filters))
+}
+
+pub fn get_flamegraph_impl(
+    state: &RecordingState,
+    filters: RelativeFilters,
+) -> Result<FlameNode, String> {
+    let guard = state.0.lock().unwrap();
+    let profile = guard.as_ref().ok_or("no recording loaded")?;
+    let filters = to_absolute(profile, filters);
+    Ok(jfr_aggregate::flame_graph(profile, &filters))
 }
 
 pub fn get_sample_density_impl(
@@ -202,6 +212,14 @@ pub fn get_top_methods(
     filters: RelativeFilters,
 ) -> Result<TopMethods, String> {
     get_top_methods_impl(&state, filters)
+}
+
+#[tauri::command]
+pub fn get_flamegraph(
+    state: tauri::State<'_, RecordingState>,
+    filters: RelativeFilters,
+) -> Result<FlameNode, String> {
+    get_flamegraph_impl(&state, filters)
 }
 
 #[tauri::command]
@@ -494,5 +512,40 @@ mod tests {
         .unwrap();
         assert!(view.total_samples > 0);
         assert!(view.total_samples < summary.sample_count);
+    }
+
+    #[test]
+    fn flamegraph_requires_a_loaded_recording() {
+        let state = RecordingState::default();
+        let err = get_flamegraph_impl(&state, RelativeFilters::default()).unwrap_err();
+        assert!(err.contains("no recording loaded"));
+    }
+
+    #[test]
+    fn flamegraph_root_covers_all_samples_without_filters() {
+        let (state, summary) = loaded_state();
+        let root = get_flamegraph_impl(&state, RelativeFilters::default()).unwrap();
+        assert_eq!(root.frame, None);
+        assert_eq!(root.samples, summary.sample_count);
+    }
+
+    #[test]
+    fn flamegraph_thread_filter_narrows_the_tree() {
+        let (state, summary) = loaded_state();
+        let worker = summary
+            .threads
+            .iter()
+            .find(|t| t.name == "fixture-worker")
+            .unwrap();
+        let root = get_flamegraph_impl(
+            &state,
+            RelativeFilters {
+                threads: Some(vec![worker.id.0]),
+                ..RelativeFilters::default()
+            },
+        )
+        .unwrap();
+        assert!(root.samples > 0);
+        assert!(root.samples < summary.sample_count);
     }
 }
