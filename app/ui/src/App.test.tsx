@@ -169,12 +169,35 @@ describe('App', () => {
   it('closes the recording back to the welcome screen', async () => {
     const { client } = await openedApp();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Close rec.jfr' }));
     expect(client.closeRecording).toHaveBeenCalled();
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: 'katan-alysis' })).toBeInTheDocument(),
     );
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('opening a second recording shows two tabs and switches the active one', async () => {
+    const { client, store } = await openedApp();
+    client.openRecording.mockImplementation((path: string) =>
+      Promise.resolve({ handle: path === '/tmp/rec.jfr' ? 1 : 2, summary }),
+    );
+
+    await store.open('/tmp/other.jfr');
+
+    await waitFor(() => expect(screen.getByText('other.jfr')).toBeInTheDocument());
+    expect(screen.getByText('rec.jfr')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'other.jfr' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'rec.jfr' }));
+    expect(screen.getByRole('button', { name: 'rec.jfr' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(screen.getByRole('button', { name: 'other.jfr' })).not.toHaveAttribute('aria-current');
   });
 
   it('opens a dropped file', async () => {

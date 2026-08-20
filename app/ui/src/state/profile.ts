@@ -126,6 +126,8 @@ export interface ProfileStore {
   close: () => Promise<void>;
   /** All currently open recordings, in tab/open order. */
   openRecordings: () => { handle: number; path: string; summary: ProfileSummary }[];
+  /** Handle of the recording currently shown, if any is open. */
+  activeHandle: () => number | undefined;
   /** Switches the active tab to an already-open recording. */
   selectRecording: (handle: number) => Promise<void>;
   /** Closes a specific (possibly non-active) open recording. */
@@ -405,6 +407,7 @@ export function createProfileStore(client: Client = api): ProfileStore {
     close,
     openRecordings: () =>
       slots().map((s) => ({ handle: s.handle, path: s.path, summary: s.summary() })),
+    activeHandle,
     selectRecording,
     closeRecording,
     removeRecent,
