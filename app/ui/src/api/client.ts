@@ -150,43 +150,69 @@ export interface OverviewSignals {
   gc_pauses: GcPause[];
 }
 
-export function openRecording(path: string): Promise<ProfileSummary> {
+// A recording just opened (or reactivated) by the backend, addressed from
+// here on by its opaque `handle`.
+export interface OpenedRecording {
+  handle: number;
+  summary: ProfileSummary;
+}
+
+// One entry of the open-recordings list, in tab/open order.
+export interface OpenRecordingView {
+  handle: number;
+  is_active: boolean;
+  summary: ProfileSummary;
+}
+
+export function openRecording(path: string): Promise<OpenedRecording> {
   return invoke('open_recording', { path });
 }
 
-export function closeRecording(): Promise<void> {
-  return invoke('close_recording');
+export function closeRecording(handle: number): Promise<void> {
+  return invoke('close_recording', { handle });
 }
 
-export function getTopMethods(filters: RelativeFilters): Promise<TopMethods> {
-  return invoke('get_top_methods', { filters });
+export function activateRecording(handle: number): Promise<void> {
+  return invoke('activate_recording', { handle });
 }
 
-export function getFlamegraph(filters: RelativeFilters): Promise<FlameNode> {
-  return invoke('get_flamegraph', { filters });
+export function listOpenRecordings(): Promise<OpenRecordingView[]> {
+  return invoke('list_open_recordings');
 }
 
-export function getHeatmap(filters: RelativeFilters): Promise<HeatmapGrid> {
-  return invoke('get_heatmap', { filters });
+export function getTopMethods(handle: number, filters: RelativeFilters): Promise<TopMethods> {
+  return invoke('get_top_methods', { handle, filters });
+}
+
+export function getFlamegraph(handle: number, filters: RelativeFilters): Promise<FlameNode> {
+  return invoke('get_flamegraph', { handle, filters });
+}
+
+export function getHeatmap(handle: number, filters: RelativeFilters): Promise<HeatmapGrid> {
+  return invoke('get_heatmap', { handle, filters });
 }
 
 export function getMergedCalls(
+  handle: number,
   frameId: number,
   filters: RelativeFilters,
 ): Promise<MergedCallTree> {
-  return invoke('get_merged_calls', { frameId, filters });
+  return invoke('get_merged_calls', { handle, frameId, filters });
 }
 
-export function getSampleDensity(buckets: number): Promise<SampleDensity> {
-  return invoke('get_sample_density', { buckets });
+export function getSampleDensity(handle: number, buckets: number): Promise<SampleDensity> {
+  return invoke('get_sample_density', { handle, buckets });
 }
 
-export function getRecordingInfo(): Promise<RecordingInfo> {
-  return invoke('get_recording_info');
+export function getRecordingInfo(handle: number): Promise<RecordingInfo> {
+  return invoke('get_recording_info', { handle });
 }
 
-export function getOverviewSignals(maxPoints: number): Promise<OverviewSignals> {
-  return invoke('get_overview_signals', { maxPoints });
+export function getOverviewSignals(
+  handle: number,
+  maxPoints: number,
+): Promise<OverviewSignals> {
+  return invoke('get_overview_signals', { handle, maxPoints });
 }
 
 export function listRecentRecordings(): Promise<RecentRecording[]> {

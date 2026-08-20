@@ -60,8 +60,10 @@ const mergedCalls: MergedCallTree = {
 
 function mockedClient() {
   return {
-    openRecording: vi.fn().mockResolvedValue(summary),
+    openRecording: vi.fn().mockResolvedValue({ handle: 1, summary }),
     closeRecording: vi.fn().mockResolvedValue(undefined),
+    activateRecording: vi.fn().mockResolvedValue(undefined),
+    listOpenRecordings: vi.fn().mockResolvedValue([]),
     getTopMethods: vi.fn().mockResolvedValue(topMethods),
     getFlamegraph: vi.fn().mockResolvedValue(flamegraph),
     getHeatmap: vi.fn().mockResolvedValue(heatmap),
@@ -114,7 +116,7 @@ describe('App', () => {
     const { client } = await openedTopMethods();
 
     expect(client.openRecording).toHaveBeenCalledWith('/tmp/rec.jfr');
-    expect(client.getTopMethods).toHaveBeenCalledWith({});
+    expect(client.getTopMethods).toHaveBeenCalledWith(1, {});
     expect(screen.getByText('rec.jfr')).toBeInTheDocument();
     expect(screen.getByText(/504 samples in selection/)).toBeInTheDocument();
     expect(
@@ -152,7 +154,7 @@ describe('App', () => {
     await userEvent.click(screen.getByRole('button', { name: 'FixtureWorkload.hotCoordinator' }));
 
     expect(screen.getByRole('region', { name: 'Merged calls view' })).toBeInTheDocument();
-    await waitFor(() => expect(client.getMergedCalls).toHaveBeenCalledWith(0, {}));
+    await waitFor(() => expect(client.getMergedCalls).toHaveBeenCalledWith(1, 0, {}));
     expect(screen.getByText(/Focused on/)).toHaveTextContent('FixtureWorkload.hotCoordinator');
   });
 

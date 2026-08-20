@@ -1,7 +1,7 @@
-// Application state: the loaded recording, the cross-cutting filters, and
+// Application state: the open recordings, the cross-cutting filters, and
 // the view models fetched from the Rust pipeline. Every filter change flows
 // through here and re-queries the backend — views never post-process data.
-import { createResource, createSignal, type Resource } from 'solid-js';
+import { createResource, createSignal, getOwner, runWithOwner, type Accessor } from 'solid-js';
 import * as api from '../api/client';
 import { selectionLabel } from '../format';
 import { uniqueName } from './selections';
@@ -48,6 +48,38 @@ export interface NamedSelection {
   filters: RelativeFilters;
 }
 
+/**
+ * All the state and resources scoped to a single open recording. Each slot
+ * owns independent SolidJS signals/resources, so two open recordings never
+ * leak state into each other and switching back to one restores exactly
+ * what it had.
+ */
+export interface RecordingSlot {
+  handle: number;
+  path: string;
+  summary: Accessor<ProfileSummary>;
+  filters: () => RelativeFilters;
+  setFilters: (filters: RelativeFilters) => void;
+  activeView: () => ViewId;
+  setActiveView: (view: ViewId) => void;
+  selectedFrame: () => number | undefined;
+  selectFrame: (frameId: number) => void;
+  selections: () => NamedSelection[];
+  appliedSelection: () => string | undefined;
+  saveSelection: () => string;
+  applySelection: (name: string) => void;
+  clearSelection: () => void;
+  renameSelection: (name: string, wanted: string) => string;
+  deleteSelection: (name: string) => void;
+  topMethods: Accessor<TopMethods | undefined>;
+  flamegraph: Accessor<FlameNode | undefined>;
+  heatmap: Accessor<HeatmapGrid | undefined>;
+  mergedCalls: Accessor<MergedCallTree | undefined>;
+  density: Accessor<SampleDensity | undefined>;
+  info: Accessor<RecordingInfo | undefined>;
+  overviewSignals: Accessor<OverviewSignals | undefined>;
+}
+
 export interface ProfileStore {
   summary: () => ProfileSummary | undefined;
   /** Path of the recording behind `summary`, for the window chrome. */
@@ -77,21 +109,27 @@ export interface ProfileStore {
   renameSelection: (name: string, wanted: string) => string;
   deleteSelection: (name: string) => void;
   recents: () => RecentRecording[];
-  topMethods: Resource<TopMethods | undefined>;
+  topMethods: Accessor<TopMethods | undefined>;
   /** Flamegraph tree; re-fetched, like topMethods, on every filter change. */
-  flamegraph: Resource<FlameNode | undefined>;
+  flamegraph: Accessor<FlameNode | undefined>;
   /** FlameScope grid; re-fetched, like topMethods, on every filter change. */
-  heatmap: Resource<HeatmapGrid | undefined>;
+  heatmap: Accessor<HeatmapGrid | undefined>;
   /** Callers/callees of `selectedFrame`; `undefined` until one is picked. */
-  mergedCalls: Resource<MergedCallTree | undefined>;
+  mergedCalls: Accessor<MergedCallTree | undefined>;
   /** Whole-recording sample density; fetched once per recording. */
-  density: Resource<SampleDensity | undefined>;
+  density: Accessor<SampleDensity | undefined>;
   /** JVM/GC/host metadata of the recording; fetched once per recording. */
-  info: Resource<RecordingInfo | undefined>;
+  info: Accessor<RecordingInfo | undefined>;
   /** Overview signals; fetched once per recording. */
-  overviewSignals: Resource<OverviewSignals | undefined>;
+  overviewSignals: Accessor<OverviewSignals | undefined>;
   open: (path: string) => Promise<void>;
   close: () => Promise<void>;
+  /** All currently open recordings, in tab/open order. */
+  openRecordings: () => { handle: number; path: string; summary: ProfileSummary }[];
+  /** Switches the active tab to an already-open recording. */
+  selectRecording: (handle: number) => Promise<void>;
+  /** Closes a specific (possibly non-active) open recording. */
+  closeRecording: (handle: number) => Promise<void>;
   removeRecent: (path: string) => Promise<void>;
   clearRecents: () => Promise<void>;
 }
@@ -100,6 +138,8 @@ type Client = Pick<
   typeof api,
   | 'openRecording'
   | 'closeRecording'
+  | 'activateRecording'
+  | 'listOpenRecordings'
   | 'getTopMethods'
   | 'getFlamegraph'
   | 'getHeatmap'
@@ -112,15 +152,22 @@ type Client = Pick<
   | 'clearRecentRecordings'
 >;
 
-export function createProfileStore(client: Client = api): ProfileStore {
-  const [summary, setSummary] = createSignal<ProfileSummary>();
-  const [openedPath, setOpenedPath] = createSignal<string>();
-  const [opening, setOpening] = createSignal<string>();
-  const [error, setError] = createSignal<string>();
+/**
+ * Builds one independent per-recording slot: its own filters, view,
+ * selection state and resources, all scoped to `handle`. Nothing here is
+ * shared with any other slot, so switching the active handle at the store
+ * level is enough to make a different slot's state visible again.
+ */
+function createRecordingSlot(
+  handle: number,
+  path: string,
+  initialSummary: ProfileSummary,
+  client: Client,
+): RecordingSlot {
+  const [summary] = createSignal<ProfileSummary>(initialSummary);
   const [filters, setFiltersRaw] = createSignal<RelativeFilters>({});
   const [activeView, setActiveView] = createSignal<ViewId>(DEFAULT_VIEW);
   const [selectedFrame, setSelectedFrame] = createSignal<number>();
-  const [recents, setRecents] = createSignal<RecentRecording[]>([]);
   const [selections, setSelections] = createSignal<NamedSelection[]>([]);
   const [appliedSelection, setAppliedSelection] = createSignal<string>();
 
@@ -131,34 +178,27 @@ export function createProfileStore(client: Client = api): ProfileStore {
     setAppliedSelection(undefined);
   };
 
-  // The list is persisted by the backend; load it once at startup, then
-  // track the updated list each command returns.
-  void client
-    .listRecentRecordings()
-    .then(setRecents)
-    .catch(() => setRecents([]));
-
   const [topMethods] = createResource(
-    () => (summary() ? { filters: filters() } : undefined),
-    ({ filters }) => client.getTopMethods(filters),
+    () => ({ filters: filters() }),
+    ({ filters }) => client.getTopMethods(handle, filters),
   );
 
   const [flamegraph] = createResource(
-    () => (summary() ? { filters: filters() } : undefined),
-    ({ filters }) => client.getFlamegraph(filters),
+    () => ({ filters: filters() }),
+    ({ filters }) => client.getFlamegraph(handle, filters),
   );
 
   const [heatmap] = createResource(
-    () => (summary() ? { filters: filters() } : undefined),
-    ({ filters }) => client.getHeatmap(filters),
+    () => ({ filters: filters() }),
+    ({ filters }) => client.getHeatmap(handle, filters),
   );
 
   const [mergedCalls] = createResource(
     () => {
       const frameId = selectedFrame();
-      return summary() && frameId !== undefined ? { frameId, filters: filters() } : undefined;
+      return frameId !== undefined ? { frameId, filters: filters() } : undefined;
     },
-    ({ frameId, filters }) => client.getMergedCalls(frameId, filters),
+    ({ frameId, filters }) => client.getMergedCalls(handle, frameId, filters),
   );
 
   const selectFrame = (frameId: number) => {
@@ -167,55 +207,19 @@ export function createProfileStore(client: Client = api): ProfileStore {
   };
 
   const [density] = createResource(
-    () => summary(),
-    () => client.getSampleDensity(DENSITY_BUCKETS),
+    () => true,
+    () => client.getSampleDensity(handle, DENSITY_BUCKETS),
   );
 
   const [info] = createResource(
-    () => summary(),
-    () => client.getRecordingInfo(),
+    () => true,
+    () => client.getRecordingInfo(handle),
   );
 
   const [overviewSignals] = createResource(
-    () => summary(),
-    () => client.getOverviewSignals(OVERVIEW_POINTS),
+    () => true,
+    () => client.getOverviewSignals(handle, OVERVIEW_POINTS),
   );
-
-  const open = async (path: string) => {
-    // A second open while one is parsing would race the recording state.
-    if (opening() !== undefined) return;
-    setOpening(path);
-    try {
-      const opened = await client.openRecording(path);
-      setSummary(opened);
-      setOpenedPath(path);
-      // A new recording starts unfiltered, on the default view, with no
-      // saved selections: filters and selections from the previous one
-      // would silently describe a different data set.
-      setFilters({});
-      setSelections([]);
-      setActiveView(DEFAULT_VIEW);
-      setSelectedFrame(undefined);
-      setError(undefined);
-      setRecents(await client.listRecentRecordings());
-    } catch (e) {
-      // A failed open never costs the analyst the recording they were
-      // reading: only the error changes.
-      setError(String(e));
-    } finally {
-      setOpening(undefined);
-    }
-  };
-
-  const close = async () => {
-    await client.closeRecording();
-    setSummary(undefined);
-    setOpenedPath(undefined);
-    setFilters({});
-    setSelections([]);
-    setSelectedFrame(undefined);
-    setError(undefined);
-  };
 
   const saveSelection = () => {
     const current = filters();
@@ -257,6 +261,104 @@ export function createProfileStore(client: Client = api): ProfileStore {
     if (appliedSelection() === name) setAppliedSelection(undefined);
   };
 
+  return {
+    handle,
+    path,
+    summary,
+    filters,
+    setFilters,
+    activeView,
+    setActiveView,
+    selectedFrame,
+    selectFrame,
+    selections,
+    appliedSelection,
+    saveSelection,
+    applySelection,
+    clearSelection,
+    renameSelection,
+    deleteSelection,
+    topMethods,
+    flamegraph,
+    heatmap,
+    mergedCalls,
+    density,
+    info,
+    overviewSignals,
+  };
+}
+
+export function createProfileStore(client: Client = api): ProfileStore {
+  const [slots, setSlots] = createSignal<RecordingSlot[]>([]);
+  const [activeHandle, setActiveHandle] = createSignal<number>();
+  const [opening, setOpening] = createSignal<string>();
+  const [error, setError] = createSignal<string>();
+  const [recents, setRecents] = createSignal<RecentRecording[]>([]);
+
+  // `open` creates a slot (and its resources) from inside an async
+  // callback, after control has already returned past the synchronous
+  // portion of whatever root/component owns this store. Capturing the
+  // owner here and running slot creation through it keeps those signals
+  // and resources properly disposed instead of leaking.
+  const owner = getOwner();
+
+  const activeSlot = () => slots().find((s) => s.handle === activeHandle());
+
+  // The list is persisted by the backend; load it once at startup, then
+  // track the updated list each command returns.
+  void client
+    .listRecentRecordings()
+    .then(setRecents)
+    .catch(() => setRecents([]));
+
+  const open = async (path: string) => {
+    // A second open while one is parsing would race the recording state.
+    // This guard is workspace-wide, not per-slot: it protects against two
+    // concurrent parses racing, not against having multiple recordings open.
+    if (opening() !== undefined) return;
+    setOpening(path);
+    try {
+      const { handle, summary } = await client.openRecording(path);
+      // Reopening an already-open path reactivates the SAME handle: its
+      // filters/selection/view state must be exactly what they were before,
+      // since the backend told us nothing changed.
+      if (!slots().some((s) => s.handle === handle)) {
+        // A new recording starts unfiltered, on the default view, with no
+        // saved selections: filters and selections from another slot would
+        // silently describe a different data set.
+        const slot = runWithOwner(owner, () =>
+          createRecordingSlot(handle, path, summary, client),
+        ) as RecordingSlot;
+        setSlots([...slots(), slot]);
+      }
+      setActiveHandle(handle);
+      setError(undefined);
+      setRecents(await client.listRecentRecordings());
+    } catch (e) {
+      // A failed open never costs the analyst the recording they were
+      // reading: only the error changes.
+      setError(String(e));
+    } finally {
+      setOpening(undefined);
+    }
+  };
+
+  const closeRecording = async (handle: number) => {
+    await client.closeRecording(handle);
+    setSlots(slots().filter((s) => s.handle !== handle));
+    const stillOpen = await client.listOpenRecordings();
+    setActiveHandle(stillOpen.find((r) => r.is_active)?.handle);
+  };
+
+  const selectRecording = async (handle: number) => {
+    if (!slots().some((s) => s.handle === handle)) return;
+    await client.activateRecording(handle);
+    setActiveHandle(handle);
+  };
+
+  const close = () =>
+    activeHandle() === undefined ? Promise.resolve() : closeRecording(activeHandle()!);
+
   const removeRecent = async (path: string) => {
     try {
       setRecents(await client.removeRecentRecording(path));
@@ -274,33 +376,37 @@ export function createProfileStore(client: Client = api): ProfileStore {
   };
 
   return {
-    summary,
-    openedPath,
+    summary: () => activeSlot()?.summary(),
+    openedPath: () => activeSlot()?.path,
     opening,
     error,
-    filters,
-    setFilters,
-    activeView,
-    setActiveView,
-    selectedFrame,
-    selectFrame,
+    filters: () => activeSlot()?.filters() ?? {},
+    setFilters: (filters) => activeSlot()?.setFilters(filters),
+    activeView: () => activeSlot()?.activeView() ?? DEFAULT_VIEW,
+    setActiveView: (view) => activeSlot()?.setActiveView(view),
+    selectedFrame: () => activeSlot()?.selectedFrame(),
+    selectFrame: (frameId) => activeSlot()?.selectFrame(frameId),
     recents,
-    topMethods,
-    flamegraph,
-    heatmap,
-    mergedCalls,
-    density,
-    info,
-    overviewSignals,
-    selections,
-    appliedSelection,
-    saveSelection,
-    applySelection,
-    clearSelection,
-    renameSelection,
-    deleteSelection,
+    topMethods: () => activeSlot()?.topMethods(),
+    flamegraph: () => activeSlot()?.flamegraph(),
+    heatmap: () => activeSlot()?.heatmap(),
+    mergedCalls: () => activeSlot()?.mergedCalls(),
+    density: () => activeSlot()?.density(),
+    info: () => activeSlot()?.info(),
+    overviewSignals: () => activeSlot()?.overviewSignals(),
+    selections: () => activeSlot()?.selections() ?? [],
+    appliedSelection: () => activeSlot()?.appliedSelection(),
+    saveSelection: () => activeSlot()?.saveSelection() ?? '',
+    applySelection: (name) => activeSlot()?.applySelection(name),
+    clearSelection: () => activeSlot()?.clearSelection(),
+    renameSelection: (name, wanted) => activeSlot()?.renameSelection(name, wanted) ?? name,
+    deleteSelection: (name) => activeSlot()?.deleteSelection(name),
     open,
     close,
+    openRecordings: () =>
+      slots().map((s) => ({ handle: s.handle, path: s.path, summary: s.summary() })),
+    selectRecording,
+    closeRecording,
     removeRecent,
     clearRecents,
   };

@@ -19,8 +19,10 @@ const summary: ProfileSummary = {
 
 function mockedClient() {
   return {
-    openRecording: vi.fn().mockResolvedValue(summary),
+    openRecording: vi.fn().mockResolvedValue({ handle: 1, summary }),
     closeRecording: vi.fn().mockResolvedValue(undefined),
+    activateRecording: vi.fn().mockResolvedValue(undefined),
+    listOpenRecordings: vi.fn().mockResolvedValue([]),
     getTopMethods: vi.fn().mockResolvedValue({ rows: [], total_samples: 100 }),
     getFlamegraph: vi.fn().mockResolvedValue({ frame: null, samples: 0, children: [] }),
     getHeatmap: vi
