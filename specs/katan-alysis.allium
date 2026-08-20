@@ -1,19 +1,22 @@
 -- allium: 3
 -- katan-alysis.allium
 --
--- Scope: the JFR analysis desktop application — opening a recording,
--- narrowing it with the cross-cutting filters, and reading the flat
--- profile ("top methods"), flamegraph and heatmap views.
+-- Scope: the JFR analysis desktop application — opening one or more
+-- recordings, narrowing the active one with the cross-cutting filters,
+-- and reading the flat profile ("top methods"), flamegraph and heatmap
+-- views.
 --
 -- Includes:
 --   - the outcome of opening a recording (loaded summary vs. error)
---   - closing the recording, back to the welcome screen
+--   - opening more than one recording at once, switching which one is
+--     shown, and closing one without disturbing the others
 --   - the recent-recordings list: remembered opens, persisted across
---     application restarts
+--     application restarts, independent of what is currently open
 --   - the normalised profile: frames, stacks, threads, samples
 --   - the recording's own description (JVM, GC, host, key flags) and
 --     the overview that presents it with the recorded signals
---   - the thread and time filters, applied before any aggregation
+--   - the thread and time filters, applied before any aggregation, kept
+--     separately for each open recording
 --   - the top-methods aggregation (self / total sample counts)
 --   - the flamegraph: the same selection's call stacks merged into a
 --     tree by shared prefix, preserving recursion instead of
@@ -29,10 +32,6 @@
 -- Excludes:
 --   - the JFR binary format and its parsing (jfrs library, external)
 --   - transport (Tauri IPC), rendering technology and packaging
---   - several recordings open at once. It is a decided direction, not
---     an open question: the workspace will hold more than one profile
---     so recordings can be compared. Until that work starts the spec
---     describes the one-recording workspace that exists (docs/PLAN.md).
 
 ------------------------------------------------------------
 -- Given
@@ -87,7 +86,7 @@ value RecentEntry {
 }
 
 -- A selection the analyst saved under a name: the two filters, frozen.
--- Null halves mean the same as on the workspace — not narrowed.
+-- Null halves mean the same as on the recording — not narrowed.
 value SavedSelection {
     name: String
     threads: Set<ProfiledThread>?
@@ -177,15 +176,18 @@ entity Sample {
     leaf_frame: stack.leaf
     distinct_frames: stack.distinct_frames
 
-    -- The filters are cross-cutting: every view sees the same selected
-    -- samples, so no view may re-filter or post-process aggregated data.
+    -- The filters are cross-cutting: every view of a recording sees the
+    -- same selected samples, so no view may re-filter or post-process
+    -- aggregated data. Each recording keeps its own filters, so a
+    -- sample is judged against the selection of the recording it came
+    -- from, never another open recording's.
     matches_thread_filter:
-        workspace.selected_threads = null
-        or thread in workspace.selected_threads
+        profile.open_recording.selected_threads = null
+        or thread in profile.open_recording.selected_threads
     matches_time_filter:
-        workspace.selected_window = null
-        or (ts_nanos >= workspace.selected_window.start_nanos
-            and ts_nanos <= workspace.selected_window.end_nanos)
+        profile.open_recording.selected_window = null
+        or (ts_nanos >= profile.open_recording.selected_window.start_nanos
+            and ts_nanos <= profile.open_recording.selected_window.end_nanos)
     is_selected: matches_thread_filter and matches_time_filter
 }
 
@@ -198,6 +200,8 @@ entity Profile {
     stacks: Stack with profile = this
     threads: ProfiledThread with profile = this
     samples: Sample with profile = this
+    -- The one open recording this profile belongs to.
+    open_recording: OpenRecording with profile = this
 
     -- What the recording says about the JVM that produced it. Every
     -- field may be absent — an async-profiler recording, or one made
@@ -224,11 +228,16 @@ entity Profile {
     duration_nanos: last_sample_nanos - first_sample_nanos
 }
 
--- The application state: at most one recording open, plus the filters
--- currently narrowing it.
-entity AnalysisWorkspace {
-    -- Absent until a recording has been opened successfully.
-    profile: Profile?
+-- One recording open in the workspace: its normalised profile, the
+-- filters currently narrowing it, and the focus and saved selections
+-- that belong to it alone. Every other open recording keeps its own —
+-- narrowing one never touches another. An OpenRecording only ever
+-- exists with a profile attached, so the "requires a recording"
+-- invariants the single-profile workspace used to need are now
+-- structural rather than asserted.
+entity OpenRecording {
+    workspace: AnalysisWorkspace
+    profile: Profile
     -- Absent means "every thread" / "the whole recording". An empty
     -- filter is not a filter: selecting no thread, or a window holding
     -- no instant, narrows nothing rather than emptying the views. The
@@ -242,19 +251,16 @@ entity AnalysisWorkspace {
     -- itself a filter: it survives a filter change instead of resetting
     -- with it.
     focused_frame: Frame?
-    -- Why the last attempt to open a recording failed, if it did.
-    last_error: String?
-    -- What the welcome screen lists: recordings whose last open
-    -- succeeded, most recent first. Unlike the rest of the workspace
-    -- this list survives an application restart.
-    recent_recordings: List<RecentEntry>
-    -- Selections saved under a name for the current recording, in save
-    -- order. In memory only: they die with the recording session.
+    -- Selections saved under a name for this recording, in save order.
+    -- In memory only: they die with the recording.
     saved_selections: List<SavedSelection>
 
-    has_recording: profile != null
+    -- Whether this is the recording whose views are currently shown.
+    is_active: this = workspace.active_recording
+
     selected_samples: profile.samples where is_selected
-    -- The denominator of every percentage the analyst reads.
+    -- The denominator of every percentage the analyst reads for this
+    -- recording.
     selection_size: selected_samples.count
     top_methods: profile.frames where is_visible
     -- The distinct call stacks reached by the current selection, each
@@ -263,19 +269,6 @@ entity AnalysisWorkspace {
     -- top_methods, a stack's frames are not deduplicated — a method
     -- that recurses appears once per depth it occurs at.
     selected_stacks: selected_samples -> stack
-
-    invariant FiltersRequireARecording {
-        not has_recording
-            implies selected_threads = null and selected_window = null
-    }
-
-    invariant FocusRequiresARecording {
-        not has_recording implies focused_frame = null
-    }
-
-    invariant SelectionsRequireARecording {
-        not has_recording implies saved_selections.count = 0
-    }
 
     -- One name designates one saved selection; conflicts are resolved
     -- with a numeric suffix as names are taken.
@@ -288,6 +281,42 @@ entity AnalysisWorkspace {
     invariant NoEmptyFilterIsEverHeld {
         (selected_threads = null or selected_threads.count > 0)
             and (selected_window = null or not selected_window.is_empty)
+    }
+}
+
+-- The application state: every recording currently open, which one's
+-- views are shown, and what survives across all of them.
+entity AnalysisWorkspace {
+    -- Every recording currently open, in the order they were opened.
+    open_recordings: List<OpenRecording>
+    -- Which open recording's views are currently shown. Absent only
+    -- when nothing is open.
+    active_recording: OpenRecording?
+    -- Why the last attempt to open a recording failed, if it did.
+    last_error: String?
+    -- What the welcome screen lists: recordings whose last open
+    -- succeeded, most recent first, across every recording ever
+    -- opened — not scoped to what is currently open. Unlike the rest
+    -- of the workspace this list survives an application restart.
+    recent_recordings: List<RecentEntry>
+
+    has_recording: active_recording != null
+    is_recording_open(path): open_recordings.any(r => r.profile.source.path = path)
+
+    invariant ActiveRecordingIsAmongOpenOnes {
+        active_recording != null implies active_recording in open_recordings
+    }
+
+    invariant AnOpenRecordingIsAlwaysActive {
+        open_recordings.count > 0 implies active_recording != null
+    }
+
+    -- Reopening an already-open path activates it rather than opening
+    -- a second copy, so no two open recordings ever share a path.
+    invariant NoRecordingIsOpenedTwice {
+        for a in open_recordings:
+            for b in open_recordings:
+                a != b implies a.profile.source.path != b.profile.source.path
     }
 
     -- The list is a shortlist, not a history: at most ten entries, one
@@ -305,19 +334,24 @@ entity AnalysisWorkspace {
 
 rule LoadRecording {
     when: AnalystOpensRecording(analyst, recording)
+    requires: not workspace.is_recording_open(recording.path)
     requires: is_readable(recording)
     requires: has_execution_samples(recording)
     ensures:
-        workspace.profile = Profile.created(source: recording)
-        -- A new recording starts unfiltered: filters from the previous
-        -- one would silently narrow a different data set.
-        workspace.selected_threads = null
-        workspace.selected_window = null
-        workspace.focused_frame = null
+        let profile = Profile.created(source: recording)
+        let opened = OpenRecording.created(
+            workspace: workspace,
+            profile: profile,
+            selected_threads: null,
+            selected_window: null,
+            focused_frame: null,
+            saved_selections: [])
+        -- Appends the newly opened recording after every other one
+        -- already open.
+        workspace.open_recordings =
+            with_recording_open(workspace.open_recordings, opened)
+        workspace.active_recording = opened
         workspace.last_error = null
-        -- Saved selections named windows of the previous recording;
-        -- they would silently describe a different data set here.
-        workspace.saved_selections = []
         -- The open is remembered: the recording's entry moves to (or
         -- appears at) the front of the recents list, and the entry
         -- beyond the shortlist bound, if any, falls off the end.
@@ -329,28 +363,48 @@ rule LoadRecording {
         -- such samples is an unusable recording.
 }
 
+rule ActivateAlreadyOpenRecording {
+    when: AnalystOpensRecording(analyst, recording)
+    requires: workspace.is_recording_open(recording.path)
+    ensures:
+        for opened in workspace.open_recordings where profile.source.path = recording.path:
+            workspace.active_recording = opened
+        workspace.last_error = null
+        workspace.recent_recordings =
+            remembered(workspace.recent_recordings, recording)
+}
+
 rule RejectUnusableRecording {
     when: AnalystOpensRecording(analyst, recording)
+    requires: not workspace.is_recording_open(recording.path)
     requires: not is_readable(recording) or not has_execution_samples(recording)
     ensures:
         -- The workspace keeps whatever was already open: a failed open
-        -- never costs the analyst the recording they were reading, and
+        -- never costs the analyst a recording they were reading, and
         -- never rewrites the recents list.
         workspace.last_error = failure_reason(recording)
 }
 
+rule ActivateOpenRecording {
+    when: AnalystSelectsOpenRecording(analyst, recording)
+    requires: recording in workspace.open_recordings
+    ensures: workspace.active_recording = recording
+}
+
 rule CloseRecording {
-    when: AnalystClosesRecording(analyst)
-    requires: workspace.has_recording
+    when: AnalystClosesRecording(analyst, recording)
+    requires: recording in workspace.open_recordings
     ensures:
-        -- Filters and saved selections die with the recording they
-        -- narrowed. The recents list is untouched: closing is not
-        -- forgetting.
-        workspace.profile = null
-        workspace.selected_threads = null
-        workspace.selected_window = null
-        workspace.focused_frame = null
-        workspace.saved_selections = []
+        -- Filters, focus and saved selections die with the recording
+        -- they narrowed: nothing else in the workspace depends on them.
+        if workspace.active_recording = recording:
+            -- Prefers the open recording immediately before the closed
+            -- one, falling back to the one immediately after, or to no
+            -- active recording when none remain.
+            workspace.active_recording =
+                next_active(workspace.open_recordings, recording)
+        workspace.open_recordings =
+            without_recording(workspace.open_recordings, recording)
         workspace.last_error = null
 }
 
@@ -373,15 +427,16 @@ rule NarrowToThreads {
     requires: workspace.has_recording
     ensures:
         if threads.count = 0:
-            workspace.selected_threads = null
+            workspace.active_recording.selected_threads = null
         else:
-            workspace.selected_threads = threads
+            workspace.active_recording.selected_threads = threads
 }
 
 rule WidenToAllThreads {
     when: AnalystClearsThreadSelection(analyst)
-    requires: workspace.selected_threads != null
-    ensures: workspace.selected_threads = null
+    requires: workspace.has_recording
+    requires: workspace.active_recording.selected_threads != null
+    ensures: workspace.active_recording.selected_threads = null
 }
 
 rule NarrowToTimeWindow {
@@ -392,15 +447,16 @@ rule NarrowToTimeWindow {
         -- how the analyst backs out of a selection, not a rejected
         -- action.
         if window.is_empty:
-            workspace.selected_window = null
+            workspace.active_recording.selected_window = null
         else:
-            workspace.selected_window = window
+            workspace.active_recording.selected_window = window
 }
 
 rule WidenToWholeRecording {
     when: AnalystClearsTimeWindow(analyst)
-    requires: workspace.selected_window != null
-    ensures: workspace.selected_window = null
+    requires: workspace.has_recording
+    requires: workspace.active_recording.selected_window != null
+    ensures: workspace.active_recording.selected_window = null
 }
 
 rule SelectMethod {
@@ -409,37 +465,40 @@ rule SelectMethod {
     ensures:
         -- Selecting a different method replaces the focus outright; the
         -- analyst does not have to clear it first.
-        workspace.focused_frame = frame
+        workspace.active_recording.focused_frame = frame
 }
 
 rule ClearMethodSelection {
     when: AnalystClearsMethodSelection(analyst)
-    requires: workspace.focused_frame != null
-    ensures: workspace.focused_frame = null
+    requires: workspace.has_recording
+    requires: workspace.active_recording.focused_frame != null
+    ensures: workspace.active_recording.focused_frame = null
 }
 
 rule SaveCurrentSelection {
     when: AnalystSavesSelection(analyst)
+    requires: workspace.has_recording
     -- Saving the absence of selection would duplicate the built-in
     -- "no selection" entry, so there must be something to name.
-    requires: workspace.selected_threads != null
-        or workspace.selected_window != null
+    requires: workspace.active_recording.selected_threads != null
+        or workspace.active_recording.selected_window != null
     ensures:
         -- The default name describes the selection — the period (or
         -- "whole recording") and the thread count (or "all threads");
         -- a name conflict takes the first free " (n)" suffix, n >= 2.
-        workspace.saved_selections = with_saved(
-            workspace.saved_selections,
-            workspace.selected_threads,
-            workspace.selected_window)
+        workspace.active_recording.saved_selections = with_saved(
+            workspace.active_recording.saved_selections,
+            workspace.active_recording.selected_threads,
+            workspace.active_recording.selected_window)
 }
 
 rule ApplySavedSelection {
     when: AnalystAppliesSelection(analyst, selection)
-    requires: selection in workspace.saved_selections
+    requires: workspace.has_recording
+    requires: selection in workspace.active_recording.saved_selections
     ensures:
-        workspace.selected_threads = selection.threads
-        workspace.selected_window = selection.window
+        workspace.active_recording.selected_threads = selection.threads
+        workspace.active_recording.selected_window = selection.window
 }
 
 -- The "no selection" entry of the selection menu: every thread, the
@@ -448,27 +507,29 @@ rule ApplyNoSelection {
     when: AnalystClearsSelection(analyst)
     requires: workspace.has_recording
     ensures:
-        workspace.selected_threads = null
-        workspace.selected_window = null
+        workspace.active_recording.selected_threads = null
+        workspace.active_recording.selected_window = null
 }
 
 rule RenameSavedSelection {
     when: AnalystRenamesSelection(analyst, selection, wanted)
-    requires: selection in workspace.saved_selections
+    requires: workspace.has_recording
+    requires: selection in workspace.active_recording.saved_selections
     ensures:
         -- Same conflict rule as saving; a blank name changes nothing.
-        workspace.saved_selections = renamed(
-            workspace.saved_selections, selection, wanted)
+        workspace.active_recording.saved_selections = renamed(
+            workspace.active_recording.saved_selections, selection, wanted)
 }
 
 rule DeleteSavedSelection {
     when: AnalystDeletesSelection(analyst, selection)
-    requires: selection in workspace.saved_selections
+    requires: workspace.has_recording
+    requires: selection in workspace.active_recording.saved_selections
     ensures:
         -- Deleting forgets the name, not the current selection: the
         -- filters the entry may have produced stay in place.
-        workspace.saved_selections = without_selection(
-            workspace.saved_selections, selection)
+        workspace.active_recording.saved_selections = without_selection(
+            workspace.active_recording.saved_selections, selection)
 }
 
 ------------------------------------------------------------
@@ -481,16 +542,20 @@ invariant SelfNeverExceedsTotal {
         frame.self_samples <= frame.total_samples
 }
 
--- No method can cover more samples than the selection holds.
+-- No method can cover more samples than its own recording's selection
+-- holds — each open recording is bounded by its own selection, never
+-- another open recording's.
 invariant TotalBoundedBySelection {
     for frame in Frames:
-        frame.total_samples <= workspace.selection_size
+        frame.total_samples <= frame.profile.open_recording.selection_size
 }
 
 -- Exactly one method is on CPU per sample, so the self counts of a
--- profile partition its selection.
+-- recording's frames partition that recording's own selection.
 invariant SelfCountsPartitionTheSelection {
-    sum_of(Frames, f => f.self_samples) = workspace.selection_size
+    for recording in OpenRecordings:
+        sum_of(recording.profile.frames, f => f.self_samples)
+            = recording.selection_size
 }
 
 -- Every sample belongs to the recording it was read from, and so does
@@ -511,9 +576,11 @@ surface RecordingLoader {
     exposes:
         workspace.has_recording
         workspace.last_error
-        workspace.profile.sample_count
-        workspace.profile.duration_nanos
-        workspace.profile.threads.name
+        for recording in workspace.open_recordings:
+            recording.is_active
+            recording.profile.source.path
+            recording.profile.sample_count
+            recording.profile.duration_nanos
         for entry in workspace.recent_recordings:
             entry.path
             entry.size_bytes
@@ -522,8 +589,10 @@ surface RecordingLoader {
 
     provides:
         AnalystOpensRecording(analyst, recording)
-        AnalystClosesRecording(analyst)
-            when workspace.has_recording
+        AnalystSelectsOpenRecording(analyst, recording)
+            when recording in workspace.open_recordings
+        AnalystClosesRecording(analyst, recording)
+            when recording in workspace.open_recordings
         AnalystRemovesRecent(analyst, path)
             when workspace.recent_recordings.count > 0
         AnalystClearsRecents(analyst)
@@ -544,14 +613,26 @@ surface RecordingLoader {
     @guarantee RecentsSurviveARestart
         -- The list is the one piece of workspace state that outlives
         -- the process: quitting and relaunching the application shows
-        -- the same recents. Everything else — the loaded recording, the
-        -- filters — starts fresh.
+        -- the same recents. Everything else — which recordings are
+        -- open, their filters — starts fresh.
 
     @guarantee OpeningIsVisibleAndSingular
         -- Parsing a large recording takes time: while an open runs, the
         -- surface says which file is being opened, and a second open
         -- cannot start until the first settles — two parses racing for
         -- the workspace would leave it in neither state.
+
+    @guarantee ReopeningAnOpenRecordingActivatesIt
+        -- Opening a path that is already open does not create a second
+        -- copy alongside it: it makes the existing open recording
+        -- active, exactly as if the analyst had switched to it
+        -- directly, and its filters and focus are left exactly as they
+        -- were.
+
+    @guidance
+        -- Switching which open recording is active, or closing one,
+        -- never changes another open recording's filters, focus or
+        -- saved selections — those belong to the recording alone.
 
     related:
         RecordingOverview() when workspace.has_recording
@@ -567,23 +648,23 @@ surface RecordingOverview {
     facing analyst: Analyst
 
     exposes:
-        workspace.profile.jvm_name
-        workspace.profile.jvm_version
-        workspace.profile.young_collector
-        workspace.profile.old_collector
-        workspace.profile.heap_max_bytes
-        workspace.profile.os_description
-        workspace.profile.cpu_cores
-        workspace.profile.physical_memory_bytes
-        workspace.profile.xmx
-        workspace.profile.xms
-        workspace.profile.max_direct_memory
-        workspace.profile.debug_non_safepoints
+        workspace.active_recording.profile.jvm_name
+        workspace.active_recording.profile.jvm_version
+        workspace.active_recording.profile.young_collector
+        workspace.active_recording.profile.old_collector
+        workspace.active_recording.profile.heap_max_bytes
+        workspace.active_recording.profile.os_description
+        workspace.active_recording.profile.cpu_cores
+        workspace.active_recording.profile.physical_memory_bytes
+        workspace.active_recording.profile.xmx
+        workspace.active_recording.profile.xms
+        workspace.active_recording.profile.max_direct_memory
+        workspace.active_recording.profile.debug_non_safepoints
 
     provides:
         -- Brushing a period on any chart is the "analyze this period"
         -- gesture: it narrows the time window and hands over to the
-        -- top-methods view.
+        -- top-methods view, both scoped to the active recording.
         AnalystSelectsTimeWindow(analyst, window)
             when workspace.has_recording
 
@@ -611,19 +692,19 @@ surface TopMethodsView {
     facing analyst: Analyst
 
     exposes:
-        workspace.selection_size
+        workspace.active_recording.selection_size
         -- The selection chrome, shared by every specialized view: the
         -- current selection summarised in one line, the thread panel,
         -- the timeline strip carrying the brush, and the menu of saved
-        -- selections.
-        workspace.selected_threads
-        workspace.selected_window
-        for thread in workspace.profile.threads:
+        -- selections — all scoped to the active recording.
+        workspace.active_recording.selected_threads
+        workspace.active_recording.selected_window
+        for thread in workspace.active_recording.profile.threads:
             thread.name
             thread.sample_count
-        for selection in workspace.saved_selections:
+        for selection in workspace.active_recording.saved_selections:
             selection.name
-        for frame in workspace.top_methods:
+        for frame in workspace.active_recording.top_methods:
             frame.class_name
             frame.method_name
             frame.self_samples
@@ -633,24 +714,30 @@ surface TopMethodsView {
         AnalystSelectsThreads(analyst, threads)
             when workspace.has_recording
         AnalystClearsThreadSelection(analyst)
-            when workspace.selected_threads != null
+            when workspace.has_recording
+                and workspace.active_recording.selected_threads != null
         AnalystSelectsTimeWindow(analyst, window)
             when workspace.has_recording
         AnalystClearsTimeWindow(analyst)
-            when workspace.selected_window != null
+            when workspace.has_recording
+                and workspace.active_recording.selected_window != null
         AnalystSavesSelection(analyst)
-            when workspace.selected_threads != null
-                or workspace.selected_window != null
+            when workspace.has_recording
+                and (workspace.active_recording.selected_threads != null
+                    or workspace.active_recording.selected_window != null)
         AnalystAppliesSelection(analyst, selection)
-            when workspace.saved_selections.count > 0
+            when workspace.has_recording
+                and workspace.active_recording.saved_selections.count > 0
         AnalystClearsSelection(analyst)
             when workspace.has_recording
         AnalystRenamesSelection(analyst, selection, wanted)
-            when workspace.saved_selections.count > 0
+            when workspace.has_recording
+                and workspace.active_recording.saved_selections.count > 0
         AnalystDeletesSelection(analyst, selection)
-            when workspace.saved_selections.count > 0
+            when workspace.has_recording
+                and workspace.active_recording.saved_selections.count > 0
         -- Picking a method here is the "inspect this" gesture: it hands
-        -- over to the merged-calls view, focused on it.
+        -- over to the merged-calls view.
         AnalystSelectsMethod(analyst, frame)
             when workspace.has_recording
 
@@ -661,7 +748,8 @@ surface TopMethodsView {
 
     @guarantee PercentagesShareOneDenominator
         -- Self and total percentages are read against the size of the
-        -- current selection, not against the whole recording.
+        -- active recording's current selection, not against the whole
+        -- recording, and not against any other open recording.
 
     @guarantee EmptyingAFilterWidensTheTable
         -- Emptying a filter never shrinks the table: deselecting every
@@ -707,16 +795,16 @@ surface FlamegraphView {
     facing analyst: Analyst
 
     exposes:
-        workspace.selection_size
+        workspace.active_recording.selection_size
         -- The selection chrome, shared with top-methods.
-        workspace.selected_threads
-        workspace.selected_window
-        for thread in workspace.profile.threads:
+        workspace.active_recording.selected_threads
+        workspace.active_recording.selected_window
+        for thread in workspace.active_recording.profile.threads:
             thread.name
             thread.sample_count
-        for selection in workspace.saved_selections:
+        for selection in workspace.active_recording.saved_selections:
             selection.name
-        for stack in workspace.selected_stacks:
+        for stack in workspace.active_recording.selected_stacks:
             stack.frames
             stack.selected_sample_count
 
@@ -724,22 +812,28 @@ surface FlamegraphView {
         AnalystSelectsThreads(analyst, threads)
             when workspace.has_recording
         AnalystClearsThreadSelection(analyst)
-            when workspace.selected_threads != null
+            when workspace.has_recording
+                and workspace.active_recording.selected_threads != null
         AnalystSelectsTimeWindow(analyst, window)
             when workspace.has_recording
         AnalystClearsTimeWindow(analyst)
-            when workspace.selected_window != null
+            when workspace.has_recording
+                and workspace.active_recording.selected_window != null
         AnalystSavesSelection(analyst)
-            when workspace.selected_threads != null
-                or workspace.selected_window != null
+            when workspace.has_recording
+                and (workspace.active_recording.selected_threads != null
+                    or workspace.active_recording.selected_window != null)
         AnalystAppliesSelection(analyst, selection)
-            when workspace.saved_selections.count > 0
+            when workspace.has_recording
+                and workspace.active_recording.saved_selections.count > 0
         AnalystClearsSelection(analyst)
             when workspace.has_recording
         AnalystRenamesSelection(analyst, selection, wanted)
-            when workspace.saved_selections.count > 0
+            when workspace.has_recording
+                and workspace.active_recording.saved_selections.count > 0
         AnalystDeletesSelection(analyst, selection)
-            when workspace.saved_selections.count > 0
+            when workspace.has_recording
+                and workspace.active_recording.saved_selections.count > 0
         -- Picking a frame here is the same "inspect this" gesture as in
         -- top-methods: it hands over to the merged-calls view.
         AnalystSelectsMethod(analyst, frame)
@@ -787,38 +881,44 @@ surface HeatmapView {
     facing analyst: Analyst
 
     exposes:
-        workspace.selection_size
-        workspace.profile.duration_nanos
+        workspace.active_recording.selection_size
+        workspace.active_recording.profile.duration_nanos
         -- The selection chrome, shared with top-methods and the
         -- flamegraph.
-        workspace.selected_threads
-        workspace.selected_window
-        for thread in workspace.profile.threads:
+        workspace.active_recording.selected_threads
+        workspace.active_recording.selected_window
+        for thread in workspace.active_recording.profile.threads:
             thread.name
             thread.sample_count
-        for selection in workspace.saved_selections:
+        for selection in workspace.active_recording.saved_selections:
             selection.name
 
     provides:
         AnalystSelectsThreads(analyst, threads)
             when workspace.has_recording
         AnalystClearsThreadSelection(analyst)
-            when workspace.selected_threads != null
+            when workspace.has_recording
+                and workspace.active_recording.selected_threads != null
         AnalystSelectsTimeWindow(analyst, window)
             when workspace.has_recording
         AnalystClearsTimeWindow(analyst)
-            when workspace.selected_window != null
+            when workspace.has_recording
+                and workspace.active_recording.selected_window != null
         AnalystSavesSelection(analyst)
-            when workspace.selected_threads != null
-                or workspace.selected_window != null
+            when workspace.has_recording
+                and (workspace.active_recording.selected_threads != null
+                    or workspace.active_recording.selected_window != null)
         AnalystAppliesSelection(analyst, selection)
-            when workspace.saved_selections.count > 0
+            when workspace.has_recording
+                and workspace.active_recording.saved_selections.count > 0
         AnalystClearsSelection(analyst)
             when workspace.has_recording
         AnalystRenamesSelection(analyst, selection, wanted)
-            when workspace.saved_selections.count > 0
+            when workspace.has_recording
+                and workspace.active_recording.saved_selections.count > 0
         AnalystDeletesSelection(analyst, selection)
-            when workspace.saved_selections.count > 0
+            when workspace.has_recording
+                and workspace.active_recording.saved_selections.count > 0
 
     @guarantee HeatmapSpansTheWholeRecording
         -- The grid's columns always cover the whole recording, regardless
@@ -852,41 +952,48 @@ surface MergedCallsView {
     facing analyst: Analyst
 
     exposes:
-        workspace.selection_size
-        workspace.focused_frame
+        workspace.active_recording.selection_size
+        workspace.active_recording.focused_frame
         -- The selection chrome, shared with the other views.
-        workspace.selected_threads
-        workspace.selected_window
-        for thread in workspace.profile.threads:
+        workspace.active_recording.selected_threads
+        workspace.active_recording.selected_window
+        for thread in workspace.active_recording.profile.threads:
             thread.name
             thread.sample_count
-        for selection in workspace.saved_selections:
+        for selection in workspace.active_recording.saved_selections:
             selection.name
 
     provides:
         AnalystSelectsMethod(analyst, frame)
             when workspace.has_recording
         AnalystClearsMethodSelection(analyst)
-            when workspace.focused_frame != null
+            when workspace.has_recording
+                and workspace.active_recording.focused_frame != null
         AnalystSelectsThreads(analyst, threads)
             when workspace.has_recording
         AnalystClearsThreadSelection(analyst)
-            when workspace.selected_threads != null
+            when workspace.has_recording
+                and workspace.active_recording.selected_threads != null
         AnalystSelectsTimeWindow(analyst, window)
             when workspace.has_recording
         AnalystClearsTimeWindow(analyst)
-            when workspace.selected_window != null
+            when workspace.has_recording
+                and workspace.active_recording.selected_window != null
         AnalystSavesSelection(analyst)
-            when workspace.selected_threads != null
-                or workspace.selected_window != null
+            when workspace.has_recording
+                and (workspace.active_recording.selected_threads != null
+                    or workspace.active_recording.selected_window != null)
         AnalystAppliesSelection(analyst, selection)
-            when workspace.saved_selections.count > 0
+            when workspace.has_recording
+                and workspace.active_recording.saved_selections.count > 0
         AnalystClearsSelection(analyst)
             when workspace.has_recording
         AnalystRenamesSelection(analyst, selection, wanted)
-            when workspace.saved_selections.count > 0
+            when workspace.has_recording
+                and workspace.active_recording.saved_selections.count > 0
         AnalystDeletesSelection(analyst, selection)
-            when workspace.saved_selections.count > 0
+            when workspace.has_recording
+                and workspace.active_recording.saved_selections.count > 0
 
     @guarantee FocusedFrameRootsBothTrees
         -- Both trees are rooted at the focused method: its sample count
@@ -916,9 +1023,3 @@ surface MergedCallsView {
         -- flamegraph replaces the focused method rather than requiring
         -- an explicit clear first.
 }
-
-------------------------------------------------------------
--- Open Questions
-------------------------------------------------------------
-
-open question "When several recordings are open at once, is a filter selection per recording or shared across them?"
