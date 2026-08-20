@@ -61,10 +61,7 @@ impl Recordings {
     }
 
     fn entry(&self, handle: RecordingHandle) -> Option<&OpenEntry> {
-        self.open
-            .iter()
-            .find(|(h, _)| *h == handle)
-            .map(|(_, e)| e)
+        self.open.iter().find(|(h, _)| *h == handle).map(|(_, e)| e)
     }
 
     fn profile(&self, handle: RecordingHandle) -> Result<&Profile, String> {
@@ -200,7 +197,10 @@ pub fn close_recording_impl(state: &RecordingState, handle: RecordingHandle) {
 /// Makes an already-open recording the active one. Errors, leaving the
 /// active recording untouched, if `handle` doesn't resolve to an open
 /// entry.
-pub fn activate_recording_impl(state: &RecordingState, handle: RecordingHandle) -> Result<(), String> {
+pub fn activate_recording_impl(
+    state: &RecordingState,
+    handle: RecordingHandle,
+) -> Result<(), String> {
     let mut recordings = state.0.lock().unwrap();
     if recordings.position_of_handle(handle).is_none() {
         return Err("no open recording with that handle".to_string());
@@ -670,9 +670,8 @@ mod tests {
     #[test]
     fn top_methods_requires_a_loaded_recording() {
         let state = RecordingState::default();
-        let err =
-            get_top_methods_impl(&state, RecordingHandle(0), RelativeFilters::default())
-                .unwrap_err();
+        let err = get_top_methods_impl(&state, RecordingHandle(0), RelativeFilters::default())
+            .unwrap_err();
         assert!(err.contains("no recording loaded"));
     }
 
@@ -741,9 +740,8 @@ mod tests {
     #[test]
     fn flamegraph_requires_a_loaded_recording() {
         let state = RecordingState::default();
-        let err =
-            get_flamegraph_impl(&state, RecordingHandle(0), RelativeFilters::default())
-                .unwrap_err();
+        let err = get_flamegraph_impl(&state, RecordingHandle(0), RelativeFilters::default())
+            .unwrap_err();
         assert!(err.contains("no recording loaded"));
     }
 
@@ -825,13 +823,8 @@ mod tests {
     #[test]
     fn merged_calls_requires_a_loaded_recording() {
         let state = RecordingState::default();
-        let err = get_merged_calls_impl(
-            &state,
-            RecordingHandle(0),
-            0,
-            RelativeFilters::default(),
-        )
-        .unwrap_err();
+        let err = get_merged_calls_impl(&state, RecordingHandle(0), 0, RelativeFilters::default())
+            .unwrap_err();
         assert!(err.contains("no recording loaded"));
     }
 
@@ -922,7 +915,12 @@ mod tests {
         assert_eq!(reopened.handle, first.handle);
         let open = list_open_recordings_impl(&state);
         assert_eq!(open.len(), 2, "no duplicate entry for the reopened path");
-        assert!(open.iter().find(|v| v.handle == first.handle).unwrap().is_active);
+        assert!(
+            open.iter()
+                .find(|v| v.handle == first.handle)
+                .unwrap()
+                .is_active
+        );
     }
 
     #[test]
@@ -976,8 +974,19 @@ mod tests {
         activate_recording_impl(&state, first.handle).unwrap();
 
         let open = list_open_recordings_impl(&state);
-        assert!(open.iter().find(|v| v.handle == first.handle).unwrap().is_active);
-        assert!(!open.iter().find(|v| v.handle == second.handle).unwrap().is_active);
+        assert!(
+            open.iter()
+                .find(|v| v.handle == first.handle)
+                .unwrap()
+                .is_active
+        );
+        assert!(
+            !open
+                .iter()
+                .find(|v| v.handle == second.handle)
+                .unwrap()
+                .is_active
+        );
     }
 
     #[test]
