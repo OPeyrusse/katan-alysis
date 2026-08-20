@@ -18,9 +18,66 @@ use serde::{Deserialize, Serialize};
 
 use crate::recents::{self, RecentRecording};
 
-/// The recording currently loaded in the application.
+/// A stable identifier for one open recording, minted when it's opened and
+/// valid until it's closed. The UI addresses recordings by this rather than
+/// by path so re-opening an already-open path can resolve back to the same
+/// tab. Serialized as a bare integer on the IPC boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RecordingHandle(pub u64);
+
+/// One loaded recording: the path it was opened from (so re-opening it can
+/// be recognised), its size at open time (so reactivating it doesn't need
+/// the file to still be readable), and its parsed profile.
+struct OpenEntry {
+    path: String,
+    size_bytes: u64,
+    profile: Profile,
+}
+
+/// Every recording currently open, in tab order (insertion order), plus
+/// which one is active. Filters, focus and saved selections stay client
+/// side and never enter this struct.
 #[derive(Default)]
-pub struct RecordingState(Mutex<Option<Profile>>);
+struct Recordings {
+    next_handle: u64,
+    open: Vec<(RecordingHandle, OpenEntry)>,
+    active: Option<RecordingHandle>,
+}
+
+impl Recordings {
+    fn allocate_handle(&mut self) -> RecordingHandle {
+        let handle = RecordingHandle(self.next_handle);
+        self.next_handle += 1;
+        handle
+    }
+
+    fn position_of_handle(&self, handle: RecordingHandle) -> Option<usize> {
+        self.open.iter().position(|(h, _)| *h == handle)
+    }
+
+    fn position_of_path(&self, path: &str) -> Option<usize> {
+        self.open.iter().position(|(_, e)| e.path == path)
+    }
+
+    fn entry(&self, handle: RecordingHandle) -> Option<&OpenEntry> {
+        self.open
+            .iter()
+            .find(|(h, _)| *h == handle)
+            .map(|(_, e)| e)
+    }
+
+    fn profile(&self, handle: RecordingHandle) -> Result<&Profile, String> {
+        self.entry(handle)
+            .map(|e| &e.profile)
+            .ok_or_else(|| "no recording loaded".to_string())
+    }
+}
+
+/// Every recording currently open in the application, and which one is
+/// active.
+#[derive(Default)]
+pub struct RecordingState(Mutex<Recordings>);
 
 /// Where the recents list is persisted; resolved once at startup from the
 /// app config directory.
@@ -38,6 +95,22 @@ pub struct ProfileSummary {
     /// The thread panel orders by it; it never changes with the selection.
     pub thread_sample_counts: Vec<u64>,
     pub frames: Vec<Frame>,
+}
+
+/// The result of successfully opening (or reactivating) a recording: its
+/// handle, for every subsequent call, and its summary.
+#[derive(Debug, Clone, Serialize)]
+pub struct OpenedRecording {
+    pub handle: RecordingHandle,
+    pub summary: ProfileSummary,
+}
+
+/// One entry in the open-recordings list, as the tab strip consumes it.
+#[derive(Debug, Clone, Serialize)]
+pub struct OpenRecordingView {
+    pub handle: RecordingHandle,
+    pub is_active: bool,
+    pub summary: ProfileSummary,
 }
 
 /// Filters as sent by the UI: thread indices and a start-relative time
@@ -58,61 +131,140 @@ pub fn open_recording_impl(
     recents_store: &Path,
     path: &str,
     now_ms: u64,
-) -> Result<ProfileSummary, String> {
+) -> Result<OpenedRecording, String> {
+    // Already open: reactivate rather than re-read. The file may have
+    // vanished from disk since it was opened, so this must succeed
+    // unconditionally, using the size recorded at open time.
+    {
+        let mut recordings = state.0.lock().unwrap();
+        if let Some(idx) = recordings.position_of_path(path) {
+            let (handle, entry) = &recordings.open[idx];
+            let handle = *handle;
+            let summary = summarize(&entry.profile);
+            let size_bytes = entry.size_bytes;
+            recordings.active = Some(handle);
+            drop(recordings);
+            let _ = recents::record_open(recents_store, path, size_bytes, now_ms);
+            return Ok(OpenedRecording { handle, summary });
+        }
+    }
+
     let file = File::open(path).map_err(|e| format!("cannot open {path}: {e}"))?;
     let size_bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
     let profile = jfr_ingest::read_profile(file).map_err(|e| e.to_string())?;
     let summary = summarize(&profile);
-    *state.0.lock().unwrap() = Some(profile);
+
+    let handle = {
+        let mut recordings = state.0.lock().unwrap();
+        let handle = recordings.allocate_handle();
+        recordings.open.push((
+            handle,
+            OpenEntry {
+                path: path.to_string(),
+                size_bytes,
+                profile,
+            },
+        ));
+        recordings.active = Some(handle);
+        handle
+    };
     // Only successful opens enter the recents list, and the list is a
     // convenience: failing to persist it must not fail the open itself.
     let _ = recents::record_open(recents_store, path, size_bytes, now_ms);
-    Ok(summary)
+    Ok(OpenedRecording { handle, summary })
 }
 
-/// Drops the loaded recording. Filters live client-side and die with it;
+/// Closes one open recording. Filters live client-side and die with it;
 /// the recents list is untouched — closing is not forgetting.
-pub fn close_recording_impl(state: &RecordingState) {
-    *state.0.lock().unwrap() = None;
+///
+/// If the closed recording was active, the new active one is whatever sat
+/// immediately before it in tab order, or else whatever now sits in its old
+/// slot, or else none if nothing is left open. A no-op if `handle` isn't
+/// open — closing is idempotent, not an error.
+pub fn close_recording_impl(state: &RecordingState, handle: RecordingHandle) {
+    let mut recordings = state.0.lock().unwrap();
+    let Some(idx) = recordings.position_of_handle(handle) else {
+        return;
+    };
+    recordings.open.remove(idx);
+    if recordings.active == Some(handle) {
+        recordings.active = if idx > 0 {
+            recordings.open.get(idx - 1)
+        } else {
+            recordings.open.get(idx)
+        }
+        .map(|(h, _)| *h);
+    }
+}
+
+/// Makes an already-open recording the active one. Errors, leaving the
+/// active recording untouched, if `handle` doesn't resolve to an open
+/// entry.
+pub fn activate_recording_impl(state: &RecordingState, handle: RecordingHandle) -> Result<(), String> {
+    let mut recordings = state.0.lock().unwrap();
+    if recordings.position_of_handle(handle).is_none() {
+        return Err("no open recording with that handle".to_string());
+    }
+    recordings.active = Some(handle);
+    Ok(())
+}
+
+/// Every open recording, in tab order, with `is_active` marking the current
+/// one.
+pub fn list_open_recordings_impl(state: &RecordingState) -> Vec<OpenRecordingView> {
+    let recordings = state.0.lock().unwrap();
+    recordings
+        .open
+        .iter()
+        .map(|(handle, entry)| OpenRecordingView {
+            handle: *handle,
+            is_active: recordings.active == Some(*handle),
+            summary: summarize(&entry.profile),
+        })
+        .collect()
 }
 
 pub fn get_top_methods_impl(
     state: &RecordingState,
+    handle: RecordingHandle,
     filters: RelativeFilters,
 ) -> Result<TopMethods, String> {
     let guard = state.0.lock().unwrap();
-    let profile = guard.as_ref().ok_or("no recording loaded")?;
+    let profile = guard.profile(handle)?;
     let filters = to_absolute(profile, filters);
     Ok(jfr_aggregate::top_methods(profile, &filters))
 }
 
 pub fn get_flamegraph_impl(
     state: &RecordingState,
+    handle: RecordingHandle,
     filters: RelativeFilters,
 ) -> Result<FlameNode, String> {
     let guard = state.0.lock().unwrap();
-    let profile = guard.as_ref().ok_or("no recording loaded")?;
+    let profile = guard.profile(handle)?;
     let filters = to_absolute(profile, filters);
     Ok(jfr_aggregate::flame_graph(profile, &filters))
 }
 
 pub fn get_heatmap_impl(
     state: &RecordingState,
+    handle: RecordingHandle,
     filters: RelativeFilters,
 ) -> Result<HeatmapGrid, String> {
     let guard = state.0.lock().unwrap();
-    let profile = guard.as_ref().ok_or("no recording loaded")?;
+    let profile = guard.profile(handle)?;
     let filters = to_absolute(profile, filters);
     Ok(jfr_aggregate::heatmap(profile, &filters))
 }
 
 pub fn get_merged_calls_impl(
     state: &RecordingState,
+    handle: RecordingHandle,
     frame_id: u32,
     filters: RelativeFilters,
 ) -> Result<MergedCallTree, String> {
     let guard = state.0.lock().unwrap();
-    let profile = guard.as_ref().ok_or("no recording loaded")?;
+    let profile = guard.profile(handle)?;
     let filters = to_absolute(profile, filters);
     Ok(jfr_aggregate::merged_calls(
         profile,
@@ -123,16 +275,20 @@ pub fn get_merged_calls_impl(
 
 pub fn get_sample_density_impl(
     state: &RecordingState,
+    handle: RecordingHandle,
     buckets: u32,
 ) -> Result<SampleDensity, String> {
     let guard = state.0.lock().unwrap();
-    let profile = guard.as_ref().ok_or("no recording loaded")?;
+    let profile = guard.profile(handle)?;
     Ok(jfr_aggregate::sample_density(profile, buckets as usize))
 }
 
-pub fn get_recording_info_impl(state: &RecordingState) -> Result<RecordingInfo, String> {
+pub fn get_recording_info_impl(
+    state: &RecordingState,
+    handle: RecordingHandle,
+) -> Result<RecordingInfo, String> {
     let guard = state.0.lock().unwrap();
-    let profile = guard.as_ref().ok_or("no recording loaded")?;
+    let profile = guard.profile(handle)?;
     Ok(profile.info.clone())
 }
 
@@ -152,10 +308,11 @@ pub struct OverviewSignals {
 
 pub fn get_overview_signals_impl(
     state: &RecordingState,
+    handle: RecordingHandle,
     max_points: u32,
 ) -> Result<OverviewSignals, String> {
     let guard = state.0.lock().unwrap();
-    let profile = guard.as_ref().ok_or("no recording loaded")?;
+    let profile = guard.profile(handle)?;
     let start = profile.time_range_nanos().map(|(s, _)| s).unwrap_or(0);
     let series = |points: &[TimePoint]| {
         jfr_aggregate::resample_max(points, max_points as usize)
@@ -222,69 +379,89 @@ pub fn open_recording(
     state: tauri::State<'_, RecordingState>,
     recents: tauri::State<'_, RecentsState>,
     path: String,
-) -> Result<ProfileSummary, String> {
+) -> Result<OpenedRecording, String> {
     open_recording_impl(&state, &recents.0, &path, epoch_ms())
 }
 
 #[tauri::command]
-pub fn close_recording(state: tauri::State<'_, RecordingState>) {
-    close_recording_impl(&state);
+pub fn close_recording(state: tauri::State<'_, RecordingState>, handle: RecordingHandle) {
+    close_recording_impl(&state, handle);
+}
+
+#[tauri::command]
+pub fn activate_recording(
+    state: tauri::State<'_, RecordingState>,
+    handle: RecordingHandle,
+) -> Result<(), String> {
+    activate_recording_impl(&state, handle)
+}
+
+#[tauri::command]
+pub fn list_open_recordings(state: tauri::State<'_, RecordingState>) -> Vec<OpenRecordingView> {
+    list_open_recordings_impl(&state)
 }
 
 #[tauri::command]
 pub fn get_top_methods(
     state: tauri::State<'_, RecordingState>,
+    handle: RecordingHandle,
     filters: RelativeFilters,
 ) -> Result<TopMethods, String> {
-    get_top_methods_impl(&state, filters)
+    get_top_methods_impl(&state, handle, filters)
 }
 
 #[tauri::command]
 pub fn get_flamegraph(
     state: tauri::State<'_, RecordingState>,
+    handle: RecordingHandle,
     filters: RelativeFilters,
 ) -> Result<FlameNode, String> {
-    get_flamegraph_impl(&state, filters)
+    get_flamegraph_impl(&state, handle, filters)
 }
 
 #[tauri::command]
 pub fn get_heatmap(
     state: tauri::State<'_, RecordingState>,
+    handle: RecordingHandle,
     filters: RelativeFilters,
 ) -> Result<HeatmapGrid, String> {
-    get_heatmap_impl(&state, filters)
+    get_heatmap_impl(&state, handle, filters)
 }
 
 #[tauri::command]
 pub fn get_merged_calls(
     state: tauri::State<'_, RecordingState>,
+    handle: RecordingHandle,
     frame_id: u32,
     filters: RelativeFilters,
 ) -> Result<MergedCallTree, String> {
-    get_merged_calls_impl(&state, frame_id, filters)
+    get_merged_calls_impl(&state, handle, frame_id, filters)
 }
 
 #[tauri::command]
 pub fn get_sample_density(
     state: tauri::State<'_, RecordingState>,
+    handle: RecordingHandle,
     buckets: u32,
 ) -> Result<SampleDensity, String> {
-    get_sample_density_impl(&state, buckets)
+    get_sample_density_impl(&state, handle, buckets)
 }
 
 #[tauri::command]
 pub fn get_recording_info(
     state: tauri::State<'_, RecordingState>,
+    handle: RecordingHandle,
 ) -> Result<RecordingInfo, String> {
-    get_recording_info_impl(&state)
+    get_recording_info_impl(&state, handle)
 }
 
 #[tauri::command]
 pub fn get_overview_signals(
     state: tauri::State<'_, RecordingState>,
+    handle: RecordingHandle,
     max_points: u32,
 ) -> Result<OverviewSignals, String> {
-    get_overview_signals_impl(&state, max_points)
+    get_overview_signals_impl(&state, handle, max_points)
 }
 
 /// A recents entry as the welcome screen consumes it: the persisted entry
@@ -342,16 +519,16 @@ mod tests {
         (dir, store)
     }
 
-    fn loaded_state() -> (RecordingState, ProfileSummary) {
+    fn loaded_state() -> (RecordingState, RecordingHandle, ProfileSummary) {
         let (_dir, store) = temp_store();
         let state = RecordingState::default();
-        let summary = open_recording_impl(&state, &store, FIXTURE, 0).unwrap();
-        (state, summary)
+        let opened = open_recording_impl(&state, &store, FIXTURE, 0).unwrap();
+        (state, opened.handle, opened.summary)
     }
 
     #[test]
     fn open_recording_returns_the_summary() {
-        let (_, summary) = loaded_state();
+        let (_, _, summary) = loaded_state();
         assert_eq!(summary.sample_count, 570);
         assert!(summary.duration_nanos > 1_000_000_000);
         assert!(summary.threads.iter().any(|t| t.name == "fixture-worker"));
@@ -366,16 +543,17 @@ mod tests {
     #[test]
     fn recording_info_and_signals_require_a_loaded_recording() {
         let state = RecordingState::default();
-        assert!(get_recording_info_impl(&state).is_err());
-        assert!(get_overview_signals_impl(&state, 100).is_err());
+        let handle = RecordingHandle(0);
+        assert!(get_recording_info_impl(&state, handle).is_err());
+        assert!(get_overview_signals_impl(&state, handle, 100).is_err());
     }
 
     #[test]
     fn recording_info_reflects_the_recorded_jvm() {
         let (_dir, store) = temp_store();
         let state = RecordingState::default();
-        open_recording_impl(&state, &store, METADATA_FIXTURE, 0).unwrap();
-        let info = get_recording_info_impl(&state).unwrap();
+        let opened = open_recording_impl(&state, &store, METADATA_FIXTURE, 0).unwrap();
+        let info = get_recording_info_impl(&state, opened.handle).unwrap();
         assert_eq!(info.jvm_name.as_deref(), Some("OpenJDK 64-Bit Server VM"));
         assert_eq!(info.xmx.unwrap().value, 256 * 1024 * 1024);
         assert!(info.debug_non_safepoints.unwrap().value);
@@ -383,8 +561,8 @@ mod tests {
 
     #[test]
     fn recording_info_is_empty_for_a_minimal_recording() {
-        let (state, _) = loaded_state();
-        let info = get_recording_info_impl(&state).unwrap();
+        let (state, handle, _) = loaded_state();
+        let info = get_recording_info_impl(&state, handle).unwrap();
         assert_eq!(info, jfr_model::RecordingInfo::default());
     }
 
@@ -392,8 +570,8 @@ mod tests {
     fn overview_signals_are_relative_and_bounded() {
         let (_dir, store) = temp_store();
         let state = RecordingState::default();
-        let summary = open_recording_impl(&state, &store, METADATA_FIXTURE, 0).unwrap();
-        let signals = get_overview_signals_impl(&state, 50).unwrap();
+        let opened = open_recording_impl(&state, &store, METADATA_FIXTURE, 0).unwrap();
+        let signals = get_overview_signals_impl(&state, opened.handle, 50).unwrap();
 
         assert!(!signals.cpu_jvm_user.is_empty());
         assert!(signals.cpu_jvm_user.len() <= 50);
@@ -405,17 +583,17 @@ mod tests {
         // recording span, never in absolute epoch territory.
         let margin = 2_000_000_000;
         for p in signals.cpu_jvm_user.iter().chain(&signals.rss_bytes) {
-            assert!(p.ts_nanos > -margin && p.ts_nanos < summary.duration_nanos + margin);
+            assert!(p.ts_nanos > -margin && p.ts_nanos < opened.summary.duration_nanos + margin);
         }
         for p in &signals.gc_pauses {
-            assert!(p.ts_nanos > -margin && p.ts_nanos < summary.duration_nanos + margin);
+            assert!(p.ts_nanos > -margin && p.ts_nanos < opened.summary.duration_nanos + margin);
         }
     }
 
     #[test]
     fn sample_density_covers_every_sample() {
-        let (state, summary) = loaded_state();
-        let density = get_sample_density_impl(&state, 100).unwrap();
+        let (state, handle, summary) = loaded_state();
+        let density = get_sample_density_impl(&state, handle, 100).unwrap();
         assert!(density.counts.len() <= 100);
         assert_eq!(density.counts.iter().sum::<u64>(), summary.sample_count);
     }
@@ -423,7 +601,7 @@ mod tests {
     #[test]
     fn sample_density_requires_a_loaded_recording() {
         let state = RecordingState::default();
-        let err = get_sample_density_impl(&state, 100).unwrap_err();
+        let err = get_sample_density_impl(&state, RecordingHandle(0), 100).unwrap_err();
         assert!(err.contains("no recording loaded"));
     }
 
@@ -459,10 +637,10 @@ mod tests {
 
     #[test]
     fn a_failed_open_keeps_the_loaded_recording() {
-        let (state, summary) = loaded_state();
+        let (state, handle, summary) = loaded_state();
         let (_dir, store) = temp_store();
         open_recording_impl(&state, &store, "/nonexistent.jfr", 0).unwrap_err();
-        let view = get_top_methods_impl(&state, RelativeFilters::default()).unwrap();
+        let view = get_top_methods_impl(&state, handle, RelativeFilters::default()).unwrap();
         assert_eq!(view.total_samples, summary.sample_count);
     }
 
@@ -483,31 +661,34 @@ mod tests {
 
     #[test]
     fn close_recording_drops_the_profile() {
-        let (state, _) = loaded_state();
-        close_recording_impl(&state);
-        let err = get_top_methods_impl(&state, RelativeFilters::default()).unwrap_err();
+        let (state, handle, _) = loaded_state();
+        close_recording_impl(&state, handle);
+        let err = get_top_methods_impl(&state, handle, RelativeFilters::default()).unwrap_err();
         assert!(err.contains("no recording loaded"));
     }
 
     #[test]
     fn top_methods_requires_a_loaded_recording() {
         let state = RecordingState::default();
-        let err = get_top_methods_impl(&state, RelativeFilters::default()).unwrap_err();
+        let err =
+            get_top_methods_impl(&state, RecordingHandle(0), RelativeFilters::default())
+                .unwrap_err();
         assert!(err.contains("no recording loaded"));
     }
 
     #[test]
     fn top_methods_covers_all_samples_without_filters() {
-        let (state, summary) = loaded_state();
-        let view = get_top_methods_impl(&state, RelativeFilters::default()).unwrap();
+        let (state, handle, summary) = loaded_state();
+        let view = get_top_methods_impl(&state, handle, RelativeFilters::default()).unwrap();
         assert_eq!(view.total_samples, summary.sample_count);
     }
 
     #[test]
     fn full_relative_time_range_keeps_every_sample() {
-        let (state, summary) = loaded_state();
+        let (state, handle, summary) = loaded_state();
         let view = get_top_methods_impl(
             &state,
+            handle,
             RelativeFilters {
                 time_range_nanos: Some((0, summary.duration_nanos)),
                 ..RelativeFilters::default()
@@ -519,7 +700,7 @@ mod tests {
 
     #[test]
     fn an_empty_selection_keeps_every_sample() {
-        let (state, summary) = loaded_state();
+        let (state, handle, summary) = loaded_state();
         for filters in [
             RelativeFilters {
                 threads: Some(vec![]),
@@ -531,14 +712,14 @@ mod tests {
                 ..RelativeFilters::default()
             },
         ] {
-            let view = get_top_methods_impl(&state, filters.clone()).unwrap();
+            let view = get_top_methods_impl(&state, handle, filters.clone()).unwrap();
             assert_eq!(view.total_samples, summary.sample_count, "{filters:?}");
         }
     }
 
     #[test]
     fn thread_filter_narrows_the_view() {
-        let (state, summary) = loaded_state();
+        let (state, handle, summary) = loaded_state();
         let worker = summary
             .threads
             .iter()
@@ -546,6 +727,7 @@ mod tests {
             .unwrap();
         let view = get_top_methods_impl(
             &state,
+            handle,
             RelativeFilters {
                 threads: Some(vec![worker.id.0]),
                 ..RelativeFilters::default()
@@ -559,21 +741,23 @@ mod tests {
     #[test]
     fn flamegraph_requires_a_loaded_recording() {
         let state = RecordingState::default();
-        let err = get_flamegraph_impl(&state, RelativeFilters::default()).unwrap_err();
+        let err =
+            get_flamegraph_impl(&state, RecordingHandle(0), RelativeFilters::default())
+                .unwrap_err();
         assert!(err.contains("no recording loaded"));
     }
 
     #[test]
     fn flamegraph_root_covers_all_samples_without_filters() {
-        let (state, summary) = loaded_state();
-        let root = get_flamegraph_impl(&state, RelativeFilters::default()).unwrap();
+        let (state, handle, summary) = loaded_state();
+        let root = get_flamegraph_impl(&state, handle, RelativeFilters::default()).unwrap();
         assert_eq!(root.frame, None);
         assert_eq!(root.samples, summary.sample_count);
     }
 
     #[test]
     fn flamegraph_thread_filter_narrows_the_tree() {
-        let (state, summary) = loaded_state();
+        let (state, handle, summary) = loaded_state();
         let worker = summary
             .threads
             .iter()
@@ -581,6 +765,7 @@ mod tests {
             .unwrap();
         let root = get_flamegraph_impl(
             &state,
+            handle,
             RelativeFilters {
                 threads: Some(vec![worker.id.0]),
                 ..RelativeFilters::default()
@@ -594,21 +779,22 @@ mod tests {
     #[test]
     fn heatmap_requires_a_loaded_recording() {
         let state = RecordingState::default();
-        let err = get_heatmap_impl(&state, RelativeFilters::default()).unwrap_err();
+        let err =
+            get_heatmap_impl(&state, RecordingHandle(0), RelativeFilters::default()).unwrap_err();
         assert!(err.contains("no recording loaded"));
     }
 
     #[test]
     fn heatmap_grid_covers_all_samples_without_filters() {
-        let (state, summary) = loaded_state();
-        let grid = get_heatmap_impl(&state, RelativeFilters::default()).unwrap();
+        let (state, handle, summary) = loaded_state();
+        let grid = get_heatmap_impl(&state, handle, RelativeFilters::default()).unwrap();
         let total: u64 = grid.columns.iter().flatten().sum();
         assert_eq!(total, summary.sample_count);
     }
 
     #[test]
     fn heatmap_thread_filter_narrows_the_grid() {
-        let (state, summary) = loaded_state();
+        let (state, handle, summary) = loaded_state();
         let worker = summary
             .threads
             .iter()
@@ -616,6 +802,7 @@ mod tests {
             .unwrap();
         let grid = get_heatmap_impl(
             &state,
+            handle,
             RelativeFilters {
                 threads: Some(vec![worker.id.0]),
                 ..RelativeFilters::default()
@@ -638,15 +825,22 @@ mod tests {
     #[test]
     fn merged_calls_requires_a_loaded_recording() {
         let state = RecordingState::default();
-        let err = get_merged_calls_impl(&state, 0, RelativeFilters::default()).unwrap_err();
+        let err = get_merged_calls_impl(
+            &state,
+            RecordingHandle(0),
+            0,
+            RelativeFilters::default(),
+        )
+        .unwrap_err();
         assert!(err.contains("no recording loaded"));
     }
 
     #[test]
     fn merged_calls_trees_are_rooted_at_the_focus_without_filters() {
-        let (state, summary) = loaded_state();
+        let (state, handle, summary) = loaded_state();
         let focus = frame_id(&summary, "FixtureWorkload.hotCoordinator");
-        let tree = get_merged_calls_impl(&state, focus, RelativeFilters::default()).unwrap();
+        let tree =
+            get_merged_calls_impl(&state, handle, focus, RelativeFilters::default()).unwrap();
 
         assert_eq!(tree.focus.0, focus);
         assert_eq!(tree.callers.frame, Some(tree.focus));
@@ -658,9 +852,10 @@ mod tests {
 
     #[test]
     fn merged_calls_thread_filter_narrows_the_trees() {
-        let (state, summary) = loaded_state();
+        let (state, handle, summary) = loaded_state();
         let focus = frame_id(&summary, "FixtureWorkload.hotCoordinator");
-        let unfiltered = get_merged_calls_impl(&state, focus, RelativeFilters::default()).unwrap();
+        let unfiltered =
+            get_merged_calls_impl(&state, handle, focus, RelativeFilters::default()).unwrap();
         let worker = summary
             .threads
             .iter()
@@ -668,6 +863,7 @@ mod tests {
             .unwrap();
         let narrowed = get_merged_calls_impl(
             &state,
+            handle,
             focus,
             RelativeFilters {
                 threads: Some(vec![worker.id.0]),
@@ -682,11 +878,112 @@ mod tests {
 
     #[test]
     fn merged_calls_for_a_frame_absent_from_the_selection_has_no_samples() {
-        let (state, summary) = loaded_state();
+        let (state, handle, summary) = loaded_state();
         let absent = summary.frames.len() as u32;
-        let tree = get_merged_calls_impl(&state, absent, RelativeFilters::default()).unwrap();
+        let tree =
+            get_merged_calls_impl(&state, handle, absent, RelativeFilters::default()).unwrap();
 
         assert_eq!(tree.callers.samples, 0);
         assert_eq!(tree.callees.samples, 0);
+    }
+
+    #[test]
+    fn opening_two_recordings_yields_two_independent_handles() {
+        let (_dir, store) = temp_store();
+        let state = RecordingState::default();
+        let first = open_recording_impl(&state, &store, FIXTURE, 0).unwrap();
+        let second = open_recording_impl(&state, &store, METADATA_FIXTURE, 1).unwrap();
+        assert_ne!(first.handle, second.handle);
+
+        let first_info = get_recording_info_impl(&state, first.handle).unwrap();
+        assert_eq!(first_info, jfr_model::RecordingInfo::default());
+        let second_info = get_recording_info_impl(&state, second.handle).unwrap();
+        assert_eq!(
+            second_info.jvm_name.as_deref(),
+            Some("OpenJDK 64-Bit Server VM")
+        );
+
+        let open = list_open_recordings_impl(&state);
+        assert_eq!(open.len(), 2);
+        assert_eq!(open[0].handle, first.handle);
+        assert!(!open[0].is_active);
+        assert_eq!(open[1].handle, second.handle);
+        assert!(open[1].is_active);
+    }
+
+    #[test]
+    fn reopening_an_open_path_returns_the_same_handle() {
+        let (_dir, store) = temp_store();
+        let state = RecordingState::default();
+        let first = open_recording_impl(&state, &store, FIXTURE, 0).unwrap();
+        open_recording_impl(&state, &store, METADATA_FIXTURE, 1).unwrap();
+        let reopened = open_recording_impl(&state, &store, FIXTURE, 2).unwrap();
+
+        assert_eq!(reopened.handle, first.handle);
+        let open = list_open_recordings_impl(&state);
+        assert_eq!(open.len(), 2, "no duplicate entry for the reopened path");
+        assert!(open.iter().find(|v| v.handle == first.handle).unwrap().is_active);
+    }
+
+    #[test]
+    fn closing_the_active_recording_activates_the_previous_one() {
+        let (_dir, store) = temp_store();
+        let state = RecordingState::default();
+        let first = open_recording_impl(&state, &store, FIXTURE, 0).unwrap();
+        let second = open_recording_impl(&state, &store, METADATA_FIXTURE, 1).unwrap();
+
+        close_recording_impl(&state, second.handle);
+
+        let open = list_open_recordings_impl(&state);
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].handle, first.handle);
+        assert!(open[0].is_active);
+    }
+
+    #[test]
+    fn closing_the_only_open_recording_leaves_nothing_active() {
+        let (state, handle, _) = loaded_state();
+        close_recording_impl(&state, handle);
+
+        assert!(list_open_recordings_impl(&state).is_empty());
+        let err = get_top_methods_impl(&state, handle, RelativeFilters::default()).unwrap_err();
+        assert!(err.contains("no recording loaded"));
+    }
+
+    #[test]
+    fn closing_a_non_active_recording_leaves_the_active_one_untouched() {
+        let (_dir, store) = temp_store();
+        let state = RecordingState::default();
+        let first = open_recording_impl(&state, &store, FIXTURE, 0).unwrap();
+        let second = open_recording_impl(&state, &store, METADATA_FIXTURE, 1).unwrap();
+
+        close_recording_impl(&state, first.handle);
+
+        let open = list_open_recordings_impl(&state);
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].handle, second.handle);
+        assert!(open[0].is_active);
+    }
+
+    #[test]
+    fn activate_recording_switches_the_active_handle() {
+        let (_dir, store) = temp_store();
+        let state = RecordingState::default();
+        let first = open_recording_impl(&state, &store, FIXTURE, 0).unwrap();
+        let second = open_recording_impl(&state, &store, METADATA_FIXTURE, 1).unwrap();
+        assert!(list_open_recordings_impl(&state)[1].is_active);
+
+        activate_recording_impl(&state, first.handle).unwrap();
+
+        let open = list_open_recordings_impl(&state);
+        assert!(open.iter().find(|v| v.handle == first.handle).unwrap().is_active);
+        assert!(!open.iter().find(|v| v.handle == second.handle).unwrap().is_active);
+    }
+
+    #[test]
+    fn activate_recording_rejects_an_unknown_handle() {
+        let (state, handle, _) = loaded_state();
+        let err = activate_recording_impl(&state, RecordingHandle(handle.0 + 1)).unwrap_err();
+        assert!(err.contains("no open recording"));
     }
 }

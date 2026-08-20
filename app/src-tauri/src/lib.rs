@@ -27,6 +27,8 @@ pub fn run() {
             ping,
             commands::open_recording,
             commands::close_recording,
+            commands::list_open_recordings,
+            commands::activate_recording,
             commands::get_top_methods,
             commands::get_flamegraph,
             commands::get_heatmap,
