@@ -55,8 +55,10 @@ const density = { bucket_nanos: 100, counts: [4, 6] };
 
 function client() {
   return {
-    openRecording: vi.fn().mockResolvedValue(summary),
+    openRecording: vi.fn().mockResolvedValue({ handle: 1, summary }),
     closeRecording: vi.fn().mockResolvedValue(undefined),
+    activateRecording: vi.fn().mockResolvedValue(undefined),
+    listOpenRecordings: vi.fn().mockResolvedValue([]),
     getTopMethods: vi.fn().mockResolvedValue(view),
     getFlamegraph: vi.fn().mockResolvedValue(flame),
     getHeatmap: vi.fn().mockResolvedValue(heatmap),
@@ -99,10 +101,12 @@ describe('createProfileStore', () => {
       expect(store.summary()).toEqual(summary);
       expect(store.openedPath()).toBe('/tmp/rec.jfr');
       await vi.waitFor(() => expect(store.topMethods()).toEqual(view));
-      expect(api.getTopMethods).toHaveBeenCalledWith({});
+      expect(api.getTopMethods).toHaveBeenCalledWith(1, {});
 
       store.setFilters({ threads: [0] });
-      await vi.waitFor(() => expect(api.getTopMethods).toHaveBeenCalledWith({ threads: [0] }));
+      await vi.waitFor(() =>
+        expect(api.getTopMethods).toHaveBeenCalledWith(1, { threads: [0] }),
+      );
       dispose();
     });
   });
@@ -114,10 +118,10 @@ describe('createProfileStore', () => {
 
       await store.open('/tmp/rec.jfr');
       await vi.waitFor(() => expect(store.heatmap()).toEqual(heatmap));
-      expect(api.getHeatmap).toHaveBeenCalledWith({});
+      expect(api.getHeatmap).toHaveBeenCalledWith(1, {});
 
       store.setFilters({ threads: [0] });
-      await vi.waitFor(() => expect(api.getHeatmap).toHaveBeenCalledWith({ threads: [0] }));
+      await vi.waitFor(() => expect(api.getHeatmap).toHaveBeenCalledWith(1, { threads: [0] }));
       dispose();
     });
   });
@@ -146,11 +150,11 @@ describe('createProfileStore', () => {
       expect(store.selectedFrame()).toBe(0);
       expect(store.activeView()).toBe('merged-calls');
       await vi.waitFor(() => expect(store.mergedCalls()).toEqual(merged));
-      expect(api.getMergedCalls).toHaveBeenCalledWith(0, {});
+      expect(api.getMergedCalls).toHaveBeenCalledWith(1, 0, {});
 
       store.setFilters({ threads: [0] });
       await vi.waitFor(() =>
-        expect(api.getMergedCalls).toHaveBeenCalledWith(0, { threads: [0] }),
+        expect(api.getMergedCalls).toHaveBeenCalledWith(1, 0, { threads: [0] }),
       );
       dispose();
     });
@@ -158,7 +162,11 @@ describe('createProfileStore', () => {
 
   it('selecting a frame survives once selected, but dies with the recording', async () => {
     await createRoot(async (dispose) => {
-      const store = createProfileStore(client());
+      const api = client();
+      api.openRecording.mockImplementation((path: string) =>
+        Promise.resolve({ handle: path === '/a.jfr' ? 1 : 2, summary }),
+      );
+      const store = createProfileStore(api);
 
       await store.open('/a.jfr');
       store.selectFrame(0);
@@ -190,7 +198,11 @@ describe('createProfileStore', () => {
 
   it('resets filters and lands on the default view when opening', async () => {
     await createRoot(async (dispose) => {
-      const store = createProfileStore(client());
+      const api = client();
+      api.openRecording.mockImplementation((path: string) =>
+        Promise.resolve({ handle: path === '/a.jfr' ? 1 : 2, summary }),
+      );
+      const store = createProfileStore(api);
 
       await store.open('/a.jfr');
       store.setFilters({ threads: [0] });
@@ -206,6 +218,7 @@ describe('createProfileStore', () => {
   it('close drops the recording, its filters and any error', async () => {
     await createRoot(async (dispose) => {
       const api = client();
+      api.listOpenRecordings.mockResolvedValue([]);
       const store = createProfileStore(api);
 
       await store.open('/tmp/rec.jfr');
@@ -213,7 +226,7 @@ describe('createProfileStore', () => {
       store.selectFrame(0);
       await store.close();
 
-      expect(api.closeRecording).toHaveBeenCalled();
+      expect(api.closeRecording).toHaveBeenCalledWith(1);
       expect(store.summary()).toBeUndefined();
       expect(store.openedPath()).toBeUndefined();
       expect(store.filters()).toEqual({});
@@ -321,7 +334,13 @@ describe('createProfileStore', () => {
 
   it('selections die with the recording', async () => {
     await createRoot(async (dispose) => {
-      const store = createProfileStore(client());
+      const api = client();
+      api.listOpenRecordings.mockResolvedValue([]);
+      api.openRecording.mockImplementation((path: string) =>
+        Promise.resolve({ handle: path === '/a.jfr' ? 1 : 2, summary }),
+      );
+      const store = createProfileStore(api);
+
       await store.open('/a.jfr');
       store.setFilters({ threads: [0] });
       store.saveSelection();
@@ -359,6 +378,92 @@ describe('createProfileStore', () => {
       await store.clearRecents();
       expect(api.clearRecentRecordings).toHaveBeenCalled();
       expect(store.recents()).toEqual([]);
+      dispose();
+    });
+  });
+
+  it('keeps two opened recordings independent, and restores state on switch back', async () => {
+    await createRoot(async (dispose) => {
+      const api = client();
+      api.openRecording.mockImplementation((path: string) =>
+        Promise.resolve({ handle: path === '/a.jfr' ? 1 : 2, summary }),
+      );
+      const store = createProfileStore(api);
+
+      await store.open('/a.jfr');
+      store.setFilters({ threads: [0] });
+      expect(store.filters()).toEqual({ threads: [0] });
+
+      await store.open('/b.jfr');
+      expect(store.openedPath()).toBe('/b.jfr');
+      expect(store.filters()).toEqual({});
+
+      await store.selectRecording(1);
+      expect(store.openedPath()).toBe('/a.jfr');
+      expect(store.filters()).toEqual({ threads: [0] });
+      dispose();
+    });
+  });
+
+  it('reopening an already-open path reactivates the same slot without resetting it', async () => {
+    await createRoot(async (dispose) => {
+      const api = client();
+      api.openRecording.mockResolvedValue({ handle: 1, summary });
+      const store = createProfileStore(api);
+
+      await store.open('/a.jfr');
+      store.setFilters({ threads: [0] });
+      store.selectFrame(0);
+
+      await store.open('/a.jfr');
+      expect(store.filters()).toEqual({ threads: [0] });
+      expect(store.selectedFrame()).toBe(0);
+      expect(store.openRecordings()).toHaveLength(1);
+      dispose();
+    });
+  });
+
+  it('openRecordings reflects both open slots after opening two paths', async () => {
+    await createRoot(async (dispose) => {
+      const api = client();
+      api.openRecording.mockImplementation((path: string) =>
+        Promise.resolve({ handle: path === '/a.jfr' ? 1 : 2, summary }),
+      );
+      const store = createProfileStore(api);
+
+      await store.open('/a.jfr');
+      await store.open('/b.jfr');
+
+      expect(store.openRecordings()).toEqual([
+        { handle: 1, path: '/a.jfr', summary },
+        { handle: 2, path: '/b.jfr', summary },
+      ]);
+      dispose();
+    });
+  });
+
+  it('closing a non-active tab leaves the active one untouched', async () => {
+    await createRoot(async (dispose) => {
+      const api = client();
+      api.openRecording.mockImplementation((path: string) =>
+        Promise.resolve({ handle: path === '/a.jfr' ? 1 : 2, summary }),
+      );
+      const store = createProfileStore(api);
+
+      await store.open('/a.jfr');
+      await store.open('/b.jfr');
+      store.setFilters({ threads: [1] });
+      expect(store.openedPath()).toBe('/b.jfr');
+
+      api.listOpenRecordings.mockResolvedValue([
+        { handle: 2, is_active: true, summary },
+      ]);
+      await store.closeRecording(1);
+
+      expect(api.closeRecording).toHaveBeenCalledWith(1);
+      expect(store.openedPath()).toBe('/b.jfr');
+      expect(store.filters()).toEqual({ threads: [1] });
+      expect(store.openRecordings()).toEqual([{ handle: 2, path: '/b.jfr', summary }]);
       dispose();
     });
   });
