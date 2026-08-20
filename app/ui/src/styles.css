@@ -165,8 +165,75 @@ kbd {
   border-bottom: 1px solid var(--border);
 }
 
-.recording-name {
+.recording-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.recording-tabs ul {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.recording-tabs li {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.recording-tabs li.active {
+  border-color: var(--accent);
+}
+
+.recording-tab {
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 0.35rem 0.6rem;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.recording-tab.active {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.recording-tab-close {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0.35rem 0.5rem;
+  border-left: 1px solid var(--border);
+}
+
+.recording-tab-close:hover {
+  color: inherit;
+}
+
+.recording-tab-add {
+  border: 1px dashed var(--border);
+  background: none;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 0.3rem 0.6rem;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.recording-tab-add:hover {
+  color: inherit;
+  border-color: var(--accent);
 }
 
 .workspace-body {

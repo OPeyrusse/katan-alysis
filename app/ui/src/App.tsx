@@ -3,13 +3,13 @@ import { createProfileStore, type ProfileStore } from './state/profile';
 import { tauriShell, type Shell } from './api/shell';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { Sidebar } from './components/Sidebar';
+import { RecordingTabs } from './components/RecordingTabs';
 import { SelectionChrome } from './components/SelectionChrome';
 import { TopMethodsView } from './components/views/TopMethodsView';
 import { OverviewView } from './components/views/OverviewView';
 import { FlamegraphView } from './components/views/FlamegraphView';
 import { HeatmapView } from './components/views/HeatmapView';
 import { MergedCallsView } from './components/views/MergedCallsView';
-import { basename } from './format';
 
 export function App(props: { store?: ProfileStore; shell?: Shell }) {
   // Test-injection seams, read once on purpose: both live as long as the
@@ -51,10 +51,15 @@ export function App(props: { store?: ProfileStore; shell?: Shell }) {
       {(summary) => (
         <div class="workspace">
           <header class="titlebar">
-            <span class="recording-name">
-              {basename(store.openedPath() ?? 'recording')}
-            </span>
-            <button onClick={() => void store.close()}>Close</button>
+            <RecordingTabs
+              store={store}
+              onAddRecording={() => {
+                void (async () => {
+                  const path = await shell.pickRecordingFile();
+                  if (path) await store.open(path);
+                })();
+              }}
+            />
           </header>
           <Show when={store.error()}>
             <p role="alert">{store.error()}</p>
