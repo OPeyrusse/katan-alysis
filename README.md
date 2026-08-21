@@ -45,12 +45,12 @@ Rust data crates (no system dependencies):
 cargo test --workspace
 ```
 
-Coverage (same gate as CI — fails under 80% line coverage, workspace total
+Coverage (same gate as CI — fails under 90% line coverage, workspace total
 or any individual file; needs `rustup component add llvm-tools-preview` and
 [cargo-llvm-cov]):
 
 ```
-cargo llvm-cov --workspace --fail-under-lines 80 --fail-under-file-lines 80   # per-module summary + gate
+cargo llvm-cov --workspace --fail-under-lines 90 --fail-under-file-lines 90   # per-module summary + gate
 cargo llvm-cov report --html                                                 # browsable report in target/llvm-cov/html
 ```
 

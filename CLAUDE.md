@@ -21,7 +21,7 @@ docs/PLAN.md            action plan and milestones
 
 ```
 cargo test --workspace                              # Rust data crates
-cargo llvm-cov --workspace --fail-under-lines 80 --fail-under-file-lines 80  # same coverage gate as CI
+cargo llvm-cov --workspace --fail-under-lines 90 --fail-under-file-lines 90  # same coverage gate as CI
 cargo test --manifest-path app/src-tauri/Cargo.toml # Tauri shell (needs webkit2gtk/gtk)
 pnpm -C app/ui test                                 # vitest
 pnpm -C app/ui typecheck
@@ -87,7 +87,7 @@ hook is a no-op.
 ## Conventions
 
 - Rust: `cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  both gated in CI, plus 80% line coverage.
+  both gated in CI, plus 90% line coverage.
 - Every crate is testable in isolation: `jfr-aggregate` against synthetic
   profiles, `jfr-ingest` against the real fixtures in `fixtures/`, the UI
   against a mocked `@tauri-apps/api`.
