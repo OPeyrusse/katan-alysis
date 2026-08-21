@@ -1,10 +1,18 @@
 //! JFR ingestion: turns a raw JFR stream into a normalized [`Profile`].
 //!
 //! This is the only crate that depends on `jfrs`. It iterates chunks and
-//! `jdk.ExecutionSample` events using the low-level API (the serde layer is
-//! only used once per unique constant-pool entry, never per sample): stack
-//! traces and threads arrive as constant-pool references, so they are
-//! interned by pool index and decoded a single time each.
+//! `jdk.ExecutionSample` events using the low-level `Accessor` API, and
+//! threads and stacks arrive as constant-pool references, so they are
+//! interned by pool index and decoded a single time each. Threads are
+//! decoded through `jfrs`'s serde layer (every field of `JdkThread` is
+//! optional, so a missing nested constant-pool entry degrades to `None`
+//! rather than failing the whole thread). Stacks are walked frame by frame
+//! through `Accessor` instead: `jfrs`'s `StackTrace`/`Method`/`Class` serde
+//! types have non-optional nested fields (e.g. a module's location), so one
+//! unresolvable constant-pool entry anywhere in a frame's method/class chain
+//! would otherwise fail the *entire* stack trace, silently dropping the
+//! sample — `Accessor` resolves each hop independently and falls back to
+//! `"<unknown>"` for the piece that is missing.
 //!
 //! Beyond the samples, the reader collects the recording's metadata (JVM,
 //! GC and OS description, a few key flags) and the periodic signals of the
@@ -19,7 +27,7 @@ use jfr_model::{
     TimePoint, UnsignedFlag,
 };
 use jfrs::reader::event::Accessor;
-use jfrs::reader::types::builtin::{JdkThread, StackTrace};
+use jfrs::reader::types::builtin::JdkThread;
 use jfrs::reader::value_descriptor::{Primitive, ValueDescriptor};
 use jfrs::reader::{Chunk, JfrReader};
 
@@ -108,7 +116,6 @@ struct Diagnostics {
     samples_missing_thread: usize,
     stack_pool_unresolved: usize,
     thread_pool_unresolved: usize,
-    stack_decode_failures: usize,
     thread_decode_failures: usize,
 }
 
@@ -246,39 +253,16 @@ impl ProfileInterner {
         }
     }
     fn intern_stack(&mut self, chunk: &Chunk, value: &ValueDescriptor) -> Option<StackId> {
-        let trace: StackTrace = match jfrs::reader::de::from_value_descriptor(chunk, value) {
-            Ok(trace) => trace,
-            Err(err) => {
-                self.diagnostics.stack_decode_failures += 1;
-                eprintln!(
-                    "jfr-ingest: failed to decode a stackTrace constant-pool entry as StackTrace: {err}"
-                );
-                return None;
-            }
-        };
-        // JFR stores stacks leaf-first; the model wants root-first.
-        let mut frame_ids: Vec<FrameId> = trace
-            .frames
-            .iter()
-            .flatten()
-            .map(|frame| {
-                let method = frame.method.as_ref();
-                let class_name = method
-                    .and_then(|m| m.class.as_ref())
-                    .and_then(|c| c.name.as_ref())
-                    .and_then(|s| s.string)
-                    .unwrap_or("<unknown>")
-                    .replace('/', ".");
-                let method_name = method
-                    .and_then(|m| m.name.as_ref())
-                    .and_then(|s| s.string)
-                    .unwrap_or("<unknown>")
-                    .to_owned();
-                self.intern_frame(Frame {
-                    class_name,
-                    method_name,
-                })
-            })
+        let accessor = Accessor::new(chunk, value);
+        let frames = accessor.get_field("frames")?.as_iter()?;
+
+        // JFR stores stacks leaf-first; the model wants root-first. A frame
+        // whose method/class name can't be resolved (a constant-pool entry
+        // missing from this chunk, e.g. an unrecorded module location) still
+        // counts as a frame, just an unnamed one: dropping it would shrink
+        // the stack instead of just leaving a gap in its labels.
+        let mut frame_ids: Vec<FrameId> = frames
+            .map(|frame| self.intern_stack_frame(&frame))
             .collect();
         frame_ids.reverse();
         if frame_ids.is_empty() {
@@ -288,6 +272,25 @@ impl ProfileInterner {
             self.stacks.push(key.clone());
             StackId((self.stacks.len() - 1) as u32)
         }))
+    }
+
+    fn intern_stack_frame(&mut self, frame: &Accessor<'_>) -> FrameId {
+        let method = frame.get_field("method");
+        let class_name = method
+            .as_ref()
+            .and_then(|m| m.get_field("type"))
+            .and_then(|class| symbol_field(&class, "name"))
+            .unwrap_or("<unknown>")
+            .replace('/', ".");
+        let method_name = method
+            .as_ref()
+            .and_then(|m| symbol_field(m, "name"))
+            .unwrap_or("<unknown>")
+            .to_owned();
+        self.intern_frame(Frame {
+            class_name,
+            method_name,
+        })
     }
 
     fn intern_frame(&mut self, frame: Frame) -> FrameId {
@@ -338,14 +341,13 @@ impl ProfileInterner {
             "jfr-ingest: {} {EXECUTION_SAMPLE} seen, {kept} kept, {dropped} dropped \
              (missing startTime: {}, missing stack: {}, missing thread: {}; \
              unresolved constant-pool refs: stack {}, thread {}; \
-             decode failures: stack {}, thread {}); {} distinct threads resolved",
+             thread decode failures: {}); {} distinct threads resolved",
             d.execution_samples_seen,
             d.samples_missing_start_time,
             d.samples_missing_stack,
             d.samples_missing_thread,
             d.stack_pool_unresolved,
             d.thread_pool_unresolved,
-            d.stack_decode_failures,
             d.thread_decode_failures,
             self.threads.len(),
         );
@@ -437,6 +439,15 @@ fn float_field(accessor: &Accessor<'_>, field: &str) -> Option<f32> {
 fn bool_field(accessor: &Accessor<'_>, field: &str) -> Option<bool> {
     match accessor.get_field(field)?.value {
         ValueDescriptor::Primitive(Primitive::Boolean(v)) => Some(*v),
+        _ => None,
+    }
+}
+
+/// Reads a `Symbol`-typed field (class, method and package names all
+/// resolve through this constant-pool type: an object wrapping one string).
+fn symbol_field<'a>(accessor: &Accessor<'a>, field: &str) -> Option<&'a str> {
+    match accessor.get_field(field)?.get_field("string")?.value {
+        ValueDescriptor::Primitive(Primitive::String(v)) => Some(v.as_str()),
         _ => None,
     }
 }
