@@ -21,7 +21,7 @@ docs/PLAN.md            action plan and milestones
 
 ```
 cargo test --workspace                              # Rust data crates
-cargo llvm-cov --workspace --fail-under-lines 80    # same coverage gate as CI
+cargo llvm-cov --workspace --fail-under-lines 80 --fail-under-file-lines 80  # same coverage gate as CI
 cargo test --manifest-path app/src-tauri/Cargo.toml # Tauri shell (needs webkit2gtk/gtk)
 pnpm -C app/ui test                                 # vitest
 pnpm -C app/ui typecheck
