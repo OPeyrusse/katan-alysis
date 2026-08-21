@@ -1,10 +1,18 @@
 //! JFR ingestion: turns a raw JFR stream into a normalized [`Profile`].
 //!
 //! This is the only crate that depends on `jfrs`. It iterates chunks and
-//! `jdk.ExecutionSample` events using the low-level API (the serde layer is
-//! only used once per unique constant-pool entry, never per sample): stack
-//! traces and threads arrive as constant-pool references, so they are
-//! interned by pool index and decoded a single time each.
+//! `jdk.ExecutionSample` events using the low-level `Accessor` API, and
+//! threads and stacks arrive as constant-pool references, so they are
+//! interned by pool index and decoded a single time each. Threads are
+//! decoded through `jfrs`'s serde layer (every field of `JdkThread` is
+//! optional, so a missing nested constant-pool entry degrades to `None`
+//! rather than failing the whole thread). Stacks are walked frame by frame
+//! through `Accessor` instead: `jfrs`'s `StackTrace`/`Method`/`Class` serde
+//! types have non-optional nested fields (e.g. a module's location), so one
+//! unresolvable constant-pool entry anywhere in a frame's method/class chain
+//! would otherwise fail the *entire* stack trace, silently dropping the
+//! sample — `Accessor` resolves each hop independently and falls back to
+//! `"<unknown>"` for the piece that is missing.
 //!
 //! Beyond the samples, the reader collects the recording's metadata (JVM,
 //! GC and OS description, a few key flags) and the periodic signals of the
@@ -19,7 +27,7 @@ use jfr_model::{
     TimePoint, UnsignedFlag,
 };
 use jfrs::reader::event::Accessor;
-use jfrs::reader::types::builtin::{JdkThread, StackTrace};
+use jfrs::reader::types::builtin::JdkThread;
 use jfrs::reader::value_descriptor::{Primitive, ValueDescriptor};
 use jfrs::reader::{Chunk, JfrReader};
 
@@ -44,28 +52,38 @@ pub fn read_profile<R: Read + Seek>(source: R) -> Result<Profile, IngestError> {
         // Constant-pool indices are only meaningful within one chunk.
         let mut stack_by_pool: HashMap<i64, Option<StackId>> = HashMap::new();
         let mut thread_by_pool: HashMap<i64, Option<ThreadId>> = HashMap::new();
+        let mut stack_pool_unresolved = 0usize;
+        let mut thread_pool_unresolved = 0usize;
 
         for event in chunk_reader.events(&chunk) {
             let event = event.map_err(parse_error)?;
             let name = event.class.name();
             if name == EXECUTION_SAMPLE {
+                interner.diagnostics.execution_samples_seen += 1;
                 let accessor = event.value();
 
                 let Some(ticks) = long_field(&accessor, "startTime") else {
+                    interner.diagnostics.samples_missing_start_time += 1;
                     continue;
                 };
-                let Some(stack) =
-                    intern_pooled(&accessor, "stackTrace", &mut stack_by_pool, |value| {
-                        interner.intern_stack(&chunk, value)
-                    })
-                else {
+                let Some(stack) = intern_pooled(
+                    &accessor,
+                    "stackTrace",
+                    &mut stack_by_pool,
+                    &mut stack_pool_unresolved,
+                    |value| interner.intern_stack(&chunk, value),
+                ) else {
+                    interner.diagnostics.samples_missing_stack += 1;
                     continue;
                 };
-                let Some(thread) =
-                    intern_pooled(&accessor, "sampledThread", &mut thread_by_pool, |value| {
-                        interner.intern_thread(&chunk, value)
-                    })
-                else {
+                let Some(thread) = intern_pooled(
+                    &accessor,
+                    "sampledThread",
+                    &mut thread_by_pool,
+                    &mut thread_pool_unresolved,
+                    |value| interner.intern_thread(&chunk, value),
+                ) else {
+                    interner.diagnostics.samples_missing_thread += 1;
                     continue;
                 };
 
@@ -78,9 +96,27 @@ pub fn read_profile<R: Read + Seek>(source: R) -> Result<Profile, IngestError> {
                 interner.collect_metadata(&chunk, name, &event.value());
             }
         }
+
+        interner.diagnostics.stack_pool_unresolved += stack_pool_unresolved;
+        interner.diagnostics.thread_pool_unresolved += thread_pool_unresolved;
     }
 
+    interner.log_diagnostics();
     interner.into_profile()
+}
+
+/// Counts of samples and constant-pool entries that could not be used, kept
+/// purely for diagnosing recordings that ingest with fewer threads or
+/// samples than expected. Logged to stderr, never surfaced in the `Profile`.
+#[derive(Default)]
+struct Diagnostics {
+    execution_samples_seen: usize,
+    samples_missing_start_time: usize,
+    samples_missing_stack: usize,
+    samples_missing_thread: usize,
+    stack_pool_unresolved: usize,
+    thread_pool_unresolved: usize,
+    thread_decode_failures: usize,
 }
 
 /// Accumulates the dictionaries of a profile while chunks are being read.
@@ -95,6 +131,7 @@ struct ProfileInterner {
     samples: Vec<Sample>,
     info: jfr_model::RecordingInfo,
     signals: jfr_model::Signals,
+    diagnostics: Diagnostics,
 }
 
 impl ProfileInterner {
@@ -216,30 +253,16 @@ impl ProfileInterner {
         }
     }
     fn intern_stack(&mut self, chunk: &Chunk, value: &ValueDescriptor) -> Option<StackId> {
-        let trace: StackTrace = jfrs::reader::de::from_value_descriptor(chunk, value).ok()?;
-        // JFR stores stacks leaf-first; the model wants root-first.
-        let mut frame_ids: Vec<FrameId> = trace
-            .frames
-            .iter()
-            .flatten()
-            .map(|frame| {
-                let method = frame.method.as_ref();
-                let class_name = method
-                    .and_then(|m| m.class.as_ref())
-                    .and_then(|c| c.name.as_ref())
-                    .and_then(|s| s.string)
-                    .unwrap_or("<unknown>")
-                    .replace('/', ".");
-                let method_name = method
-                    .and_then(|m| m.name.as_ref())
-                    .and_then(|s| s.string)
-                    .unwrap_or("<unknown>")
-                    .to_owned();
-                self.intern_frame(Frame {
-                    class_name,
-                    method_name,
-                })
-            })
+        let accessor = Accessor::new(chunk, value);
+        let frames = accessor.get_field("frames")?.as_iter()?;
+
+        // JFR stores stacks leaf-first; the model wants root-first. A frame
+        // whose method/class name can't be resolved (a constant-pool entry
+        // missing from this chunk, e.g. an unrecorded module location) still
+        // counts as a frame, just an unnamed one: dropping it would shrink
+        // the stack instead of just leaving a gap in its labels.
+        let mut frame_ids: Vec<FrameId> = frames
+            .map(|frame| self.intern_stack_frame(&frame))
             .collect();
         frame_ids.reverse();
         if frame_ids.is_empty() {
@@ -251,6 +274,25 @@ impl ProfileInterner {
         }))
     }
 
+    fn intern_stack_frame(&mut self, frame: &Accessor<'_>) -> FrameId {
+        let method = frame.get_field("method");
+        let class_name = method
+            .as_ref()
+            .and_then(|m| m.get_field("type"))
+            .and_then(|class| symbol_field(&class, "name"))
+            .unwrap_or("<unknown>")
+            .replace('/', ".");
+        let method_name = method
+            .as_ref()
+            .and_then(|m| symbol_field(m, "name"))
+            .unwrap_or("<unknown>")
+            .to_owned();
+        self.intern_frame(Frame {
+            class_name,
+            method_name,
+        })
+    }
+
     fn intern_frame(&mut self, frame: Frame) -> FrameId {
         *self.frame_ids.entry(frame).or_insert_with_key(|key| {
             self.frames.push(key.clone());
@@ -259,7 +301,16 @@ impl ProfileInterner {
     }
 
     fn intern_thread(&mut self, chunk: &Chunk, value: &ValueDescriptor) -> Option<ThreadId> {
-        let thread: JdkThread = jfrs::reader::de::from_value_descriptor(chunk, value).ok()?;
+        let thread: JdkThread = match jfrs::reader::de::from_value_descriptor(chunk, value) {
+            Ok(thread) => thread,
+            Err(err) => {
+                self.diagnostics.thread_decode_failures += 1;
+                eprintln!(
+                    "jfr-ingest: failed to decode a sampledThread constant-pool entry as JdkThread: {err} (raw value: {value:?})"
+                );
+                return None;
+            }
+        };
         let name = thread
             .java_name
             .or(thread.os_name)
@@ -274,6 +325,32 @@ impl ProfileInterner {
             });
             id
         }))
+    }
+
+    /// Prints a one-line summary to stderr when any sample or constant-pool
+    /// entry was dropped during ingestion, to help diagnose recordings that
+    /// come out with fewer threads or samples than expected.
+    fn log_diagnostics(&self) {
+        let d = &self.diagnostics;
+        let kept = self.samples.len();
+        let dropped = d.execution_samples_seen.saturating_sub(kept);
+        if dropped == 0 && d.stack_pool_unresolved == 0 && d.thread_pool_unresolved == 0 {
+            return;
+        }
+        eprintln!(
+            "jfr-ingest: {} {EXECUTION_SAMPLE} seen, {kept} kept, {dropped} dropped \
+             (missing startTime: {}, missing stack: {}, missing thread: {}; \
+             unresolved constant-pool refs: stack {}, thread {}; \
+             thread decode failures: {}); {} distinct threads resolved",
+            d.execution_samples_seen,
+            d.samples_missing_start_time,
+            d.samples_missing_stack,
+            d.samples_missing_thread,
+            d.stack_pool_unresolved,
+            d.thread_pool_unresolved,
+            d.thread_decode_failures,
+            self.threads.len(),
+        );
     }
 
     fn into_profile(mut self) -> Result<Profile, IngestError> {
@@ -306,10 +383,13 @@ impl ProfileInterner {
 }
 
 /// Reads a constant-pool field, interning it at most once per pool index.
+/// `unresolved` counts pool indices that could not be resolved at all (the
+/// checkpoint carrying that entry was never seen in this chunk).
 fn intern_pooled<T: Copy>(
     accessor: &Accessor<'_>,
     field: &str,
     cache: &mut HashMap<i64, Option<T>>,
+    unresolved: &mut usize,
     mut intern: impl FnMut(&ValueDescriptor) -> Option<T>,
 ) -> Option<T> {
     let raw = accessor.get_field_raw(field)?;
@@ -321,7 +401,16 @@ fn intern_pooled<T: Copy>(
     if let Some(cached) = cache.get(&key) {
         return *cached;
     }
-    let interned = raw.resolve().and_then(|resolved| intern(resolved.value));
+    let Some(resolved) = raw.resolve() else {
+        *unresolved += 1;
+        eprintln!(
+            "jfr-ingest: constant-pool index {key} for field {field:?} could not be resolved \
+             (no matching checkpoint in this chunk)"
+        );
+        cache.insert(key, None);
+        return None;
+    };
+    let interned = intern(resolved.value);
     cache.insert(key, interned);
     interned
 }
@@ -350,6 +439,15 @@ fn float_field(accessor: &Accessor<'_>, field: &str) -> Option<f32> {
 fn bool_field(accessor: &Accessor<'_>, field: &str) -> Option<bool> {
     match accessor.get_field(field)?.value {
         ValueDescriptor::Primitive(Primitive::Boolean(v)) => Some(*v),
+        _ => None,
+    }
+}
+
+/// Reads a `Symbol`-typed field (class, method and package names all
+/// resolve through this constant-pool type: an object wrapping one string).
+fn symbol_field<'a>(accessor: &Accessor<'a>, field: &str) -> Option<&'a str> {
+    match accessor.get_field(field)?.get_field("string")?.value {
+        ValueDescriptor::Primitive(Primitive::String(v)) => Some(v.as_str()),
         _ => None,
     }
 }
