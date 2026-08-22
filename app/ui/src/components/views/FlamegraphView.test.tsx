@@ -14,15 +14,22 @@ const summary: ProfileSummary = {
   frames: [
     { class_name: 'ClassA', method_name: 'methodA' },
     { class_name: 'ClassA', method_name: 'methodB' },
+    { class_name: 'ClassA', method_name: 'methodC' },
   ],
 };
 
+// Three levels deep under the first child so a zoom-then-zoom-again can be
+// distinguished from stepping straight back to the untouched root.
 function tree(): FlameNode {
   return {
     frame: null,
     samples: 10,
     children: [
-      { frame: 0, samples: 6, children: [{ frame: 1, samples: 6, children: [] }] },
+      {
+        frame: 0,
+        samples: 6,
+        children: [{ frame: 1, samples: 6, children: [{ frame: 2, samples: 6, children: [] }] }],
+      },
       { frame: 1, samples: 4, children: [] },
     ],
   };
@@ -84,6 +91,45 @@ describe('FlamegraphView', () => {
 
     screen.getByRole('button', { name: 'reset zoom' }).click();
     expect(screen.queryByText(/zoomed into/)).not.toBeInTheDocument();
+  });
+
+  it('zooming scrolls the focus to the top, and its ancestor stays reachable by scrolling back up', () => {
+    const { store } = flameStore();
+    const surface = renderView(store);
+
+    firePointer(surface, 'click', 30); // zooms into ClassA.methodA (depth 0, x 0-0.6)
+    expect(screen.getByText(/zoomed into/)).toBeInTheDocument();
+    expect(screen.getByText('ClassA.methodA')).toBeInTheDocument();
+    expect(surface.scrollTop).toBe(20); // one ancestor row (the root) above the focus
+
+    surface.scrollTop = 0; // analyst scrolls back up to see the ancestor
+    firePointer(surface, 'click', 50, 5); // clicks the now-visible root row
+    expect(screen.queryByText(/zoomed into/)).not.toBeInTheDocument();
+    expect(surface.scrollTop).toBe(0);
+  });
+
+  it('clicking a descendant while zoomed re-roots onto it, extending the ancestor chain', () => {
+    const { store } = flameStore();
+    const surface = renderView(store);
+
+    firePointer(surface, 'click', 30); // zooms into ClassA.methodA
+    expect(surface.scrollTop).toBe(20);
+
+    firePointer(surface, 'click', 50, 25); // with that scroll, row 2 is methodA's child methodB
+    expect(screen.getByText('ClassA.methodB')).toBeInTheDocument();
+    expect(surface.scrollTop).toBe(40); // now two ancestors (root, methodA) above the focus
+  });
+
+  it('reset zoom returns to the untouched root even several levels deep', () => {
+    const { store } = flameStore();
+    const surface = renderView(store);
+
+    firePointer(surface, 'click', 30); // zooms into ClassA.methodA
+    firePointer(surface, 'click', 50, 25); // zooms into ClassA.methodB, two levels deep
+
+    screen.getByRole('button', { name: 'reset zoom' }).click();
+    expect(screen.queryByText(/zoomed into/)).not.toBeInTheDocument();
+    expect(surface.scrollTop).toBe(0);
   });
 
   it('hovering a frame offers to view its merged calls', async () => {

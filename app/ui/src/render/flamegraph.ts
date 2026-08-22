@@ -48,6 +48,32 @@ export function rectAt(rects: FlameRect[], depth: number, x: number): FlameRect 
 }
 
 /**
+ * The chain of nodes from `root` down to `target` (inclusive of both), by
+ * object identity — recursion is shown as distinct nodes per occurrence, so
+ * identity, not frame index, is what makes a node unique in the tree.
+ * Undefined if `target` is not reachable from `root`.
+ */
+export function findPath(root: FlameNode, target: FlameNode): FlameNode[] | undefined {
+  if (root === target) return [root];
+  for (const child of root.children) {
+    const path = findPath(child, target);
+    if (path) return [root, ...path];
+  }
+  return undefined;
+}
+
+/**
+ * Lays out the focused frame and its descendants as usual, preceded by one
+ * full-width row per ancestor — the call path that led to the focus, drawn
+ * above it so the analyst can scroll up to see it and click back onto it.
+ */
+export function layoutFlameWithAncestors(ancestors: FlameNode[], focus: FlameNode): FlameRect[] {
+  const ancestorRects = ancestors.map((node, depth) => ({ node, depth, x: 0, width: 1 }));
+  const focusRects = layoutFlame(focus).map((r) => ({ ...r, depth: r.depth + ancestors.length }));
+  return [...ancestorRects, ...focusRects];
+}
+
+/**
  * A stable color per frame label, independent of sample counts or draw
  * order so the same method keeps its color across a filter change. Warm
  * hues (0-48°) match the conventional flamegraph palette; saturation and
