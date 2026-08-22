@@ -50,6 +50,8 @@ const heatmap: HeatmapGrid = {
   rows: 50,
   columns: [Array(50).fill(0)],
   max_count: 0,
+  context_columns: [Array(50).fill(0)],
+  context_max_count: 0,
 };
 
 const mergedCalls: MergedCallTree = {

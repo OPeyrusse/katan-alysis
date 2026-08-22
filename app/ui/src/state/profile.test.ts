@@ -36,6 +36,8 @@ const heatmap: HeatmapGrid = {
   rows: 1,
   columns: [[10]],
   max_count: 10,
+  context_columns: [[10]],
+  context_max_count: 10,
 };
 
 const merged: MergedCallTree = {

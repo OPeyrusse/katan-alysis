@@ -35,7 +35,7 @@ function mockedClient() {
     getFlamegraph: vi.fn().mockResolvedValue({ frame: null, samples: 0, children: [] }),
     getHeatmap: vi
       .fn()
-      .mockResolvedValue({ column_nanos: 0, row_nanos: 0, rows: 0, columns: [], max_count: 0 }),
+      .mockResolvedValue({ column_nanos: 0, row_nanos: 0, rows: 0, columns: [], max_count: 0, context_columns: [], context_max_count: 0 }),
     getMergedCalls: vi.fn().mockResolvedValue(emptyMergedCalls()),
     getSampleDensity: vi.fn().mockResolvedValue({ bucket_nanos: 1, counts: [] }),
     getRecordingInfo: vi.fn().mockResolvedValue(nullInfo()),

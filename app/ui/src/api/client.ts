@@ -64,6 +64,11 @@ export interface HeatmapGrid {
   rows: number;
   columns: number[][];
   max_count: number;
+  /** Same shape as `columns`, counted with the thread filter only — the
+   * time range never narrows it, so it still shades the part of the grid
+   * outside the current time selection. */
+  context_columns: number[][];
+  context_max_count: number;
 }
 
 /**

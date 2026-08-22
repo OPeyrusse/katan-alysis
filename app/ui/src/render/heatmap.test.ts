@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { HeatmapGrid } from '../api/client';
-import { brushedWindowNanos, cellAt, heatmapColor, layoutHeatmap } from './heatmap';
+import {
+  brushedWindowNanos,
+  cellAt,
+  cellInSelection,
+  heatmapContextColor,
+  heatmapIntensityColor,
+  layoutHeatmap,
+} from './heatmap';
 
 function grid(columns: number[][], overrides: Partial<HeatmapGrid> = {}): HeatmapGrid {
   return {
@@ -9,6 +16,8 @@ function grid(columns: number[][], overrides: Partial<HeatmapGrid> = {}): Heatma
     rows: columns[0]?.length ?? 0,
     columns,
     max_count: Math.max(0, ...columns.flat()),
+    context_columns: columns,
+    context_max_count: Math.max(0, ...columns.flat()),
     ...overrides,
   };
 }
@@ -62,22 +71,82 @@ describe('cellAt', () => {
   });
 });
 
-describe('heatmapColor', () => {
-  it('is transparent for an empty cell', () => {
-    expect(heatmapColor(0, 10)).toBe('transparent');
+describe('heatmapIntensityColor', () => {
+  it('is near-white for an empty cell', () => {
+    const lightnessOf = (color: string) => Number(color.match(/(\d+)%\)$/)?.[1]);
+    expect(lightnessOf(heatmapIntensityColor(0, 10))).toBeGreaterThan(90);
   });
 
-  it('is transparent when the grid holds no sample at all', () => {
-    expect(heatmapColor(0, 0)).toBe('transparent');
+  it('is near-white when the grid holds no sample at all', () => {
+    const lightnessOf = (color: string) => Number(color.match(/(\d+)%\)$/)?.[1]);
+    expect(lightnessOf(heatmapIntensityColor(0, 0))).toBeGreaterThan(90);
   });
 
   it('is deterministic for the same ratio', () => {
-    expect(heatmapColor(5, 10)).toBe(heatmapColor(5, 10));
+    expect(heatmapIntensityColor(5, 10)).toBe(heatmapIntensityColor(5, 10));
   });
 
   it('gets darker as the count approaches the max', () => {
     const lightnessOf = (color: string) => Number(color.match(/(\d+)%\)$/)?.[1]);
-    expect(lightnessOf(heatmapColor(10, 10))).toBeLessThan(lightnessOf(heatmapColor(1, 10)));
+    expect(lightnessOf(heatmapIntensityColor(10, 10))).toBeLessThan(
+      lightnessOf(heatmapIntensityColor(1, 10)),
+    );
+  });
+
+  it('uses an orange hue', () => {
+    expect(heatmapIntensityColor(10, 10)).toMatch(/^hsl\(2\d{1}deg/);
+  });
+});
+
+describe('heatmapContextColor', () => {
+  it('never fades all the way to white, even for an idle cell', () => {
+    const lightnessOf = (color: string) => Number(color.match(/(\d+)%\)$/)?.[1]);
+    expect(lightnessOf(heatmapContextColor(0, 10))).toBeLessThan(90);
+  });
+
+  it('is deterministic for the same ratio', () => {
+    expect(heatmapContextColor(5, 10)).toBe(heatmapContextColor(5, 10));
+  });
+
+  it('gets darker as the count approaches the max', () => {
+    const lightnessOf = (color: string) => Number(color.match(/(\d+)%\)$/)?.[1]);
+    expect(lightnessOf(heatmapContextColor(10, 10))).toBeLessThan(
+      lightnessOf(heatmapContextColor(1, 10)),
+    );
+  });
+
+  it('uses a saturated blue hue', () => {
+    const color = heatmapContextColor(10, 10);
+    expect(color).toMatch(/^hsl\(214deg/);
+    const saturation = Number(color.match(/deg (\d+)%/)?.[1]);
+    expect(saturation).toBeGreaterThanOrEqual(90);
+  });
+});
+
+describe('cellInSelection', () => {
+  const g = grid([
+    [0, 0, 0],
+    [0, 0, 0],
+  ]);
+
+  it('treats every cell as selected when there is no time window', () => {
+    expect(cellInSelection(g, 0, 0, undefined)).toBe(true);
+    expect(cellInSelection(g, 1, 2, null)).toBe(true);
+  });
+
+  it('treats every cell as selected when the window holds no instant', () => {
+    expect(cellInSelection(g, 1, 0, [5, 5])).toBe(true);
+  });
+
+  it('is true for a cell whose start falls inside the window', () => {
+    // Column 0 starts at t=0, column 1 at t=1_000_000_000.
+    expect(cellInSelection(g, 0, 0, [0, 1_000_000_000])).toBe(true);
+    expect(cellInSelection(g, 1, 0, [0, 1_000_000_000])).toBe(false);
+  });
+
+  it('is half-open on the window end', () => {
+    expect(cellInSelection(g, 1, 0, [1_000_000_000, 2_000_000_000])).toBe(true);
+    expect(cellInSelection(g, 2, 0, [1_000_000_000, 2_000_000_000])).toBe(false);
   });
 });
 

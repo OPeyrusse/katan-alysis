@@ -253,6 +253,12 @@ pub struct HeatmapGrid {
     pub columns: Vec<Vec<u64>>,
     /// The tallest cell, for scaling color intensity; `0` when empty.
     pub max_count: u64,
+    /// Same shape as `columns`, counted with the thread filter only — the
+    /// time range never narrows it. Lets a view still shade the part of the
+    /// grid outside the current time selection instead of leaving it blank.
+    pub context_columns: Vec<Vec<u64>>,
+    /// The tallest cell of `context_columns`; `0` when empty.
+    pub context_max_count: u64,
 }
 
 /// One node of the flamegraph: a frame merged across every stack that
@@ -464,6 +470,8 @@ mod tests {
             rows: 50,
             columns: vec![vec![0; 50]],
             max_count: 3,
+            context_columns: vec![vec![0; 50]],
+            context_max_count: 5,
         };
         let json = serde_json::to_string(&grid).unwrap();
         let back: HeatmapGrid = serde_json::from_str(&json).unwrap();

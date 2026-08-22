@@ -1,7 +1,14 @@
 import { Show, createEffect, createMemo, createSignal } from 'solid-js';
 import type { ProfileSummary } from '../../api/client';
 import type { ProfileStore } from '../../state/profile';
-import { brushedWindowNanos, cellAt, heatmapColor, layoutHeatmap } from '../../render/heatmap';
+import {
+  brushedWindowNanos,
+  cellAt,
+  cellInSelection,
+  heatmapContextColor,
+  heatmapIntensityColor,
+  layoutHeatmap,
+} from '../../render/heatmap';
 import { fractionAt } from '../../render/timeline';
 import { formatClock } from '../../format';
 
@@ -33,6 +40,10 @@ export function HeatmapView(props: { store: ProfileStore; summary: ProfileSummar
     return g ? layoutHeatmap(g) : [];
   });
   const total = createMemo(() => cells().reduce((sum, c) => sum + c.count, 0));
+  const contextTotal = createMemo(() => {
+    const g = grid();
+    return g ? g.context_columns.flat().reduce((sum, c) => sum + c, 0) : 0;
+  });
 
   const countAt = (cell: Cell | undefined) => {
     const g = grid();
@@ -53,8 +64,11 @@ export function HeatmapView(props: { store: ProfileStore; summary: ProfileSummar
     canvas.width = WIDTH;
     canvas.height = HEIGHT;
     ctx.clearRect(0, 0, WIDTH, HEIGHT);
+    const timeRangeNanos = props.store.filters().time_range_nanos;
     for (const cell of cells()) {
-      ctx.fillStyle = heatmapColor(cell.count, g.max_count);
+      ctx.fillStyle = cellInSelection(g, cell.column, cell.row, timeRangeNanos)
+        ? heatmapIntensityColor(cell.count, g.max_count)
+        : heatmapContextColor(g.context_columns[cell.column]?.[cell.row] ?? 0, g.context_max_count);
       ctx.fillRect(
         cell.x * WIDTH,
         cell.y * HEIGHT,
@@ -116,7 +130,10 @@ export function HeatmapView(props: { store: ProfileStore; summary: ProfileSummar
     <section class="view-heatmap" aria-label="Heatmap view">
       <Show when={grid()}>
         <p class="selection-size">{total().toLocaleString('en-US')} samples in selection</p>
-        <Show when={total() > 0} fallback={<p class="empty">No samples in this selection.</p>}>
+        <Show
+          when={contextTotal() > 0}
+          fallback={<p class="empty">No samples in this recording.</p>}
+        >
           <div
             class="heatmap-surface"
             data-testid="heatmap-surface"

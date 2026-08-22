@@ -935,12 +935,22 @@ surface HeatmapView {
         -- column's rows narrows to a slice inside one second — finer
         -- than the timeline brush, and unique to this view.
 
+    @guarantee HeatmapDistinguishesSelectionFromContext
+        -- Cells inside the current time selection shade in a warm tone,
+        -- from pale at no activity to a deep hue at the busiest cell.
+        -- Cells outside the selection shade in a cool tone on the same
+        -- scale, but never fade all the way to nothing: the rest of the
+        -- recording stays visible as context instead of disappearing into
+        -- blank space. With no time selection, the whole grid counts as
+        -- selected and renders in the warm tone.
+
     @guidance
         -- The selection chrome is the same as top-methods and the
         -- flamegraph: narrowing it here narrows it everywhere, and vice
         -- versa. A time window already selected elsewhere still shows
-        -- against the whole-recording grid, per HeatmapSpansTheWholeRecording,
-        -- so the analyst can see where it sits before adjusting it.
+        -- against the whole-recording grid, per HeatmapSpansTheWholeRecording
+        -- and HeatmapDistinguishesSelectionFromContext, so the analyst can
+        -- see where it sits before adjusting it.
 }
 
 -- Callers and callees merged around one focused method: complements

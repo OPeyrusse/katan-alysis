@@ -57,16 +57,47 @@ export function cellAt(
 }
 
 /**
- * A color for `count` relative to `maxCount`: transparent when empty,
- * otherwise a blue intensity scale from near-white up to a deep blue at the
- * tallest cell. The square-root scale keeps mid-range cells visibly shaded
- * instead of a handful of very hot cells washing out the rest.
+ * A color for `count` relative to `maxCount`, inside the current time
+ * selection: a warm orange intensity scale from near-white at zero activity
+ * up to a deep orange at the tallest cell. The square-root scale keeps
+ * mid-range cells visibly shaded instead of a handful of very hot cells
+ * washing out the rest.
  */
-export function heatmapColor(count: number, maxCount: number): string {
-  if (count <= 0 || maxCount <= 0) return 'transparent';
-  const intensity = Math.sqrt(count / maxCount);
-  const lightness = 92 - intensity * 62;
-  return `hsl(214deg 80% ${lightness}%)`;
+export function heatmapIntensityColor(count: number, maxCount: number): string {
+  const intensity = maxCount > 0 ? Math.sqrt(Math.max(0, count) / maxCount) : 0;
+  const lightness = 96 - intensity * 62;
+  return `hsl(28deg 85% ${lightness}%)`;
+}
+
+/**
+ * A color for `count` relative to `maxCount`, outside the current time
+ * selection: the same square-root intensity scale, but in a saturated blue
+ * that never fades all the way to white — the analyst should still see this
+ * part of the grid as context, not as blank space.
+ */
+export function heatmapContextColor(count: number, maxCount: number): string {
+  const intensity = maxCount > 0 ? Math.sqrt(Math.max(0, count) / maxCount) : 0;
+  const lightness = 88 - intensity * 55;
+  return `hsl(214deg 90% ${lightness}%)`;
+}
+
+/**
+ * Whether the cell at `(column, row)` falls inside `timeRangeNanos`: no
+ * window, or one holding no instant, selects the whole grid (same widening
+ * rule as `Filters`). Otherwise a cell is "in" when its start instant falls
+ * in the window, half-open like every other time filter in the app.
+ */
+export function cellInSelection(
+  grid: Pick<HeatmapGrid, 'column_nanos' | 'row_nanos'>,
+  column: number,
+  row: number,
+  timeRangeNanos: [number, number] | null | undefined,
+): boolean {
+  if (!timeRangeNanos) return true;
+  const [start, end] = timeRangeNanos;
+  if (end <= start) return true;
+  const cellStart = column * grid.column_nanos + row * grid.row_nanos;
+  return cellStart >= start && cellStart < end;
 }
 
 /**
