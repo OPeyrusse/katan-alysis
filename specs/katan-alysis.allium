@@ -20,7 +20,8 @@
 --   - the top-methods aggregation (self / total sample counts)
 --   - the flamegraph: the same selection's call stacks merged into a
 --     tree by shared prefix, preserving recursion instead of
---     collapsing it, with the analyst able to zoom into a subtree
+--     collapsing it, with the analyst able to zoom into a subtree and
+--     back out to any ancestor by scrolling up to it and clicking it
 --   - the heatmap: sample density over the whole recording, bucketed
 --     into one-second columns of twenty-millisecond rows so a
 --     periodic pattern lines up down the columns, with the analyst
@@ -851,10 +852,22 @@ surface FlamegraphView {
 
     @guarantee ZoomingIsLocalToTheView
         -- Clicking a span focuses the tree on it: that span becomes
-        -- the new top-level span and its ancestors are hidden. Zooming
+        -- the top-level span its descendants are drawn from. Zooming
         -- narrows what is drawn from the tree already fetched; it
         -- changes neither the thread nor the time selection, so it
         -- never triggers a new fetch on its own.
+
+    @guarantee AncestorsStayReachableWhileZoomed
+        -- The focused span's own ancestors are drawn above it, one
+        -- full-width row per ancestor, in call order down to the
+        -- focus. The view scrolls so the focus sits at the top by
+        -- default, hiding them, but the analyst can scroll back up to
+        -- see them and click one to make it the new focus in turn.
+
+    @guarantee ResettingZoomReturnsToTheWholeTree
+        -- Resetting the zoom returns to the unzoomed tree in one step
+        -- regardless of how many ancestors the analyst had scrolled
+        -- past to get there.
 
     @guarantee ZoomResetsWithTheSelection
         -- Changing the thread or time selection fetches a new tree and
