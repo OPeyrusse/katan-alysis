@@ -1,7 +1,13 @@
 import { Show, createEffect, createMemo, createSignal } from 'solid-js';
 import { frameLabel, type FlameNode, type ProfileSummary } from '../../api/client';
 import type { ProfileStore } from '../../state/profile';
-import { frameColor, layoutFlame, rectAt, type FlameRect } from '../../render/flamegraph';
+import {
+  findPath,
+  frameColor,
+  layoutFlameWithAncestors,
+  rectAt,
+  type FlameRect,
+} from '../../render/flamegraph';
 import { fractionAt } from '../../render/timeline';
 
 /** Internal canvas resolution; CSS stretches the width to the panel. */
@@ -10,31 +16,50 @@ const ROW_HEIGHT = 20;
 
 /**
  * The flamegraph: a call tree merging stacks that share a prefix, widths
- * proportional to sample count. Clicking a frame zooms into its subtree —
- * that frame becomes the full-width top row — and a filter change resets
- * the zoom, since the previous focus is not part of the freshly fetched
- * tree.
+ * proportional to sample count. Clicking a frame re-roots the view on it —
+ * that frame becomes the full-width focus row, with its call path drawn
+ * above as one full-width row per ancestor. The view auto-scrolls the
+ * focus to the top, so ancestors stay reachable by scrolling back up and
+ * clicking one makes it the new focus in turn. A filter change resets the
+ * zoom entirely, since the previous focus is not part of the freshly
+ * fetched tree.
  */
 export function FlamegraphView(props: { store: ProfileStore; summary: ProfileSummary }) {
-  const [zoomed, setZoomed] = createSignal<FlameNode>();
+  const [zoomStack, setZoomStack] = createSignal<FlameNode[]>([]);
   const [hovered, setHovered] = createSignal<FlameRect>();
   let surface!: HTMLDivElement;
   let canvas!: HTMLCanvasElement;
 
   createEffect(() => {
     props.store.flamegraph();
-    setZoomed(undefined);
+    setZoomStack([]);
   });
 
-  const focus = createMemo<FlameNode | undefined>(() => zoomed() ?? props.store.flamegraph());
+  const path = createMemo<FlameNode[]>(() => {
+    const stack = zoomStack();
+    if (stack.length > 0) return stack;
+    const root = props.store.flamegraph();
+    return root ? [root] : [];
+  });
+  const ancestors = createMemo(() => path().slice(0, -1));
+  const focus = createMemo<FlameNode | undefined>(() => path().at(-1));
   const rects = createMemo(() => {
     const root = focus();
-    return root ? layoutFlame(root) : [];
+    return root ? layoutFlameWithAncestors(ancestors(), root) : [];
   });
   const rows = createMemo(() => rects().reduce((max, r) => Math.max(max, r.depth + 1), 1));
 
-  const labelOf = (rect: FlameRect) =>
-    rect.node.frame === null ? '' : frameLabel(props.summary.frames, rect.node.frame);
+  createEffect(() => {
+    if (surface) surface.scrollTop = ancestors().length * ROW_HEIGHT;
+  });
+
+  const frameLabelOf = (node: FlameNode) =>
+    node.frame === null ? '' : frameLabel(props.summary.frames, node.frame);
+  const labelOf = (rect: FlameRect) => frameLabelOf(rect.node);
+  const focusLabel = createMemo(() => {
+    const node = focus();
+    return node ? frameLabelOf(node) : '';
+  });
 
   createEffect(() => {
     const ctx = canvas?.getContext('2d');
@@ -71,8 +96,14 @@ export function FlamegraphView(props: { store: ProfileStore; summary: ProfileSum
   const rectUnderPointer = (event: { clientX: number; clientY: number }) => {
     const bounds = surface.getBoundingClientRect();
     const x = fractionAt(event.clientX, bounds.left, bounds.width);
-    const depth = Math.floor((event.clientY - bounds.top) / ROW_HEIGHT);
+    const depth = Math.floor((event.clientY - bounds.top + surface.scrollTop) / ROW_HEIGHT);
     return rectAt(rects(), depth, x);
+  };
+
+  const zoomTo = (node: FlameNode) => {
+    const root = props.store.flamegraph();
+    const newPath = root && findPath(root, node);
+    if (newPath) setZoomStack(newPath);
   };
 
   return (
@@ -82,24 +113,13 @@ export function FlamegraphView(props: { store: ProfileStore; summary: ProfileSum
           <>
             <p class="selection-size">
               {root().samples.toLocaleString('en-US')} samples in selection
-              <Show when={zoomed()}>
-                {(node) => {
-                  const frame = node().frame;
-                  return (
-                    <>
-                      {' · zoomed into '}
-                      <strong>{frame === null ? '' : frameLabel(props.summary.frames, frame)}</strong>
-                      {' — '}
-                      <button
-                        type="button"
-                        class="link-button"
-                        onClick={() => setZoomed(undefined)}
-                      >
-                        reset zoom
-                      </button>
-                    </>
-                  );
-                }}
+              <Show when={ancestors().length > 0}>
+                {' · zoomed into '}
+                <strong>{focusLabel()}</strong>
+                {' — '}
+                <button type="button" class="link-button" onClick={() => setZoomStack([])}>
+                  reset zoom
+                </button>
               </Show>
             </p>
             <Show
@@ -114,7 +134,7 @@ export function FlamegraphView(props: { store: ProfileStore; summary: ProfileSum
                 onPointerLeave={() => setHovered(undefined)}
                 onClick={(e) => {
                   const rect = rectUnderPointer(e);
-                  if (rect) setZoomed(rect.node);
+                  if (rect) zoomTo(rect.node);
                 }}
               >
                 <canvas ref={canvas} />
