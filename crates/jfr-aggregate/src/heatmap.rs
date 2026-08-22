@@ -29,14 +29,27 @@ pub fn heatmap(profile: &Profile, filters: &Filters) -> HeatmapGrid {
     let span = end - start + 1;
     let column_count = ((span + COLUMN_NANOS - 1) / COLUMN_NANOS) as usize;
     let mut columns = vec![vec![0u64; ROWS]; column_count];
+    let mut context_columns = vec![vec![0u64; ROWS]; column_count];
     let mut max_count = 0u64;
-    for sample in profile.samples.iter().filter(|s| filters.accepts(s)) {
+    let mut context_max_count = 0u64;
+    let context_filters = Filters {
+        threads: filters.threads.clone(),
+        time_range_nanos: None,
+    };
+    for sample in &profile.samples {
         let offset = sample.ts_nanos - start;
         let column = (offset / COLUMN_NANOS) as usize;
         let row = ((offset % COLUMN_NANOS) / ROW_NANOS) as usize;
-        let cell = &mut columns[column][row];
-        *cell += 1;
-        max_count = max_count.max(*cell);
+        if context_filters.accepts(sample) {
+            let cell = &mut context_columns[column][row];
+            *cell += 1;
+            context_max_count = context_max_count.max(*cell);
+        }
+        if filters.accepts(sample) {
+            let cell = &mut columns[column][row];
+            *cell += 1;
+            max_count = max_count.max(*cell);
+        }
     }
 
     HeatmapGrid {
@@ -45,6 +58,8 @@ pub fn heatmap(profile: &Profile, filters: &Filters) -> HeatmapGrid {
         rows: ROWS,
         columns,
         max_count,
+        context_columns,
+        context_max_count,
     }
 }
 
@@ -137,6 +152,29 @@ mod tests {
         let grid = heatmap(&profile, &filters);
         assert_eq!(grid.columns.len(), 1);
         assert_eq!(grid.columns[0][0], 1);
+    }
+
+    #[test]
+    fn context_columns_ignore_the_time_filter_but_keep_the_thread_filter() {
+        let mut profile = profile_with_samples(&[0, COLUMN_NANOS, 2 * COLUMN_NANOS]);
+        profile.samples[1].thread = ThreadId(1);
+        let filters = Filters {
+            threads: Some(vec![ThreadId(0)]),
+            time_range_nanos: Some((0, COLUMN_NANOS)),
+        };
+        let grid = heatmap(&profile, &filters);
+
+        // The selection grid only sees column 0, thread 0.
+        assert_eq!(grid.columns[0][0], 1);
+        assert_eq!(grid.columns[1][0], 0);
+        assert_eq!(grid.columns[2][0], 0);
+        assert_eq!(grid.max_count, 1);
+
+        // The context grid spans every column but still excludes thread 1.
+        assert_eq!(grid.context_columns[0][0], 1);
+        assert_eq!(grid.context_columns[1][0], 0);
+        assert_eq!(grid.context_columns[2][0], 1);
+        assert_eq!(grid.context_max_count, 1);
     }
 
     #[test]

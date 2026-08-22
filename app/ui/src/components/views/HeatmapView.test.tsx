@@ -15,15 +15,18 @@ const summary: ProfileSummary = {
 
 function grid(): HeatmapGrid {
   // Two columns, two rows: column 0 holds all the samples, column 1 is idle.
+  const columns = [
+    [4, 6],
+    [0, 0],
+  ];
   return {
     column_nanos: 1_000_000_000,
     row_nanos: 500_000_000,
     rows: 2,
-    columns: [
-      [4, 6],
-      [0, 0],
-    ],
+    columns,
     max_count: 6,
+    context_columns: columns,
+    context_max_count: 6,
   };
 }
 
@@ -57,17 +60,34 @@ describe('HeatmapView', () => {
     expect(screen.getByText('10 samples in selection')).toBeInTheDocument();
   });
 
-  it('shows an empty message when the selection holds no sample', () => {
+  it('shows an empty message when the recording holds no sample anywhere', () => {
     const { store } = heatmapStore({
       column_nanos: 1_000_000_000,
       row_nanos: 500_000_000,
       rows: 2,
       columns: [[0, 0]],
       max_count: 0,
+      context_columns: [[0, 0]],
+      context_max_count: 0,
     });
     render(() => <HeatmapView store={store} summary={summary} />);
-    expect(screen.getByText('No samples in this selection.')).toBeInTheDocument();
+    expect(screen.getByText('No samples in this recording.')).toBeInTheDocument();
     expect(screen.queryByTestId('heatmap-surface')).not.toBeInTheDocument();
+  });
+
+  it('still renders the surface when the selection is empty but the recording has other activity', () => {
+    const { store } = heatmapStore({
+      column_nanos: 1_000_000_000,
+      row_nanos: 500_000_000,
+      rows: 2,
+      columns: [[0, 0]],
+      max_count: 0,
+      context_columns: [[4, 6]],
+      context_max_count: 6,
+    });
+    render(() => <HeatmapView store={store} summary={summary} />);
+    expect(screen.queryByText('No samples in this recording.')).not.toBeInTheDocument();
+    expect(screen.getByTestId('heatmap-surface')).toBeInTheDocument();
   });
 
   it('reports the hovered cell', () => {
