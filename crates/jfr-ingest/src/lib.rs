@@ -276,17 +276,15 @@ impl ProfileInterner {
 
     fn intern_stack_frame(&mut self, frame: &Accessor<'_>) -> FrameId {
         let method = frame.get_field("method");
-        let class_name = method
-            .as_ref()
-            .and_then(|m| m.get_field("type"))
-            .and_then(|class| symbol_field(&class, "name"))
-            .unwrap_or("<unknown>")
-            .replace('/', ".");
-        let method_name = method
-            .as_ref()
-            .and_then(|m| symbol_field(m, "name"))
-            .unwrap_or("<unknown>")
-            .to_owned();
+        let class_name = resolved_name(
+            method
+                .as_ref()
+                .and_then(|m| m.get_field("type"))
+                .and_then(|class| symbol_field(&class, "name")),
+        )
+        .replace('/', ".");
+        let method_name =
+            resolved_name(method.as_ref().and_then(|m| symbol_field(m, "name"))).to_owned();
         self.intern_frame(Frame {
             class_name,
             method_name,
@@ -443,6 +441,15 @@ fn bool_field(accessor: &Accessor<'_>, field: &str) -> Option<bool> {
     }
 }
 
+/// Falls back to `"<unknown>"` both when a constant-pool reference can't be
+/// resolved (`None`) and when it resolves to an empty string — JMC's `.()`,
+/// typically a native or synthetic root frame. Left as `""`, such a frame
+/// keeps its identity in the model but renders as a blank "." label, reading
+/// as a missing part of the stack instead of an unnamed one.
+fn resolved_name(name: Option<&str>) -> &str {
+    name.filter(|n| !n.is_empty()).unwrap_or("<unknown>")
+}
+
 /// Reads a `Symbol`-typed field (class, method and package names all
 /// resolve through this constant-pool type: an object wrapping one string).
 fn symbol_field<'a>(accessor: &Accessor<'a>, field: &str) -> Option<&'a str> {
@@ -506,5 +513,20 @@ mod tests {
     fn a_recording_without_samples_is_an_error() {
         let err = ProfileInterner::default().into_profile().unwrap_err();
         assert!(err.to_string().contains("jdk.ExecutionSample"));
+    }
+
+    #[test]
+    fn resolved_name_falls_back_on_a_missing_symbol() {
+        assert_eq!(resolved_name(None), "<unknown>");
+    }
+
+    #[test]
+    fn resolved_name_falls_back_on_an_empty_symbol() {
+        assert_eq!(resolved_name(Some("")), "<unknown>");
+    }
+
+    #[test]
+    fn resolved_name_keeps_a_real_name() {
+        assert_eq!(resolved_name(Some("hotCoordinator")), "hotCoordinator");
     }
 }
