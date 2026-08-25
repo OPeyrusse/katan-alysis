@@ -74,6 +74,12 @@ pnpm -C app/ui build
 
 Run the desktop app in dev mode: `pnpm tauri dev` (from the repo root).
 
+Launch the built binary with `--verbose` (or `-v`) for detailed ingestion
+diagnostics (which constant-pool references or threads failed to resolve),
+on top of the one-line-per-recording warning that always logs. Both go to
+stdout and to the OS-specific log directory, so they're available even when
+the app is launched from a shortcut rather than a terminal.
+
 Release build (Linux binary + .deb package):
 
 ```

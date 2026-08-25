@@ -14,8 +14,31 @@ fn ping() -> &'static str {
     "pong"
 }
 
-pub fn run() {
+/// `verbose` is the `--verbose`/`-v` CLI flag: it turns the per-entry
+/// ingestion detail (which constant-pool reference or thread failed to
+/// resolve) on top of the one-line-per-recording warning that always logs.
+/// Both go to the OS log directory as well as stdout, so a packaged build
+/// launched with the flag has somewhere to look without attaching a
+/// debugger — `jfr-ingest` itself only ever reports through the `log`
+/// crate, never by printing directly.
+pub fn run(verbose: bool) {
+    let level = if verbose {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Warn
+    };
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(level)
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: None,
+                    }),
+                ])
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .manage(commands::RecordingState::default())
         .setup(|app| {

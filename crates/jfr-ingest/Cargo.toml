@@ -7,4 +7,5 @@ license.workspace = true
 [dependencies]
 jfr-model = { path = "../jfr-model" }
 jfrs = { workspace = true }
+log = { workspace = true }
 thiserror = { workspace = true }

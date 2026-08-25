@@ -14,6 +14,13 @@
 //! sample — `Accessor` resolves each hop independently and falls back to
 //! `"<unknown>"` for the piece that is missing.
 //!
+//! Every drop and fallback is reported through the `log` crate rather than
+//! printed directly, so the embedding app decides where the diagnostics end
+//! up (stderr in a terminal, a log file in a packaged build, nowhere by
+//! default). The one-line-per-recording summary is a `warn`; the per-entry
+//! detail behind each unresolved constant-pool reference or undecodable
+//! thread is a `debug`, since a single recording can produce many of them.
+//!
 //! Beyond the samples, the reader collects the recording's metadata (JVM,
 //! GC and OS description, a few key flags) and the periodic signals of the
 //! overview (CPU load, heap occupancy, RSS, GC pauses). All of it is
@@ -107,7 +114,8 @@ pub fn read_profile<R: Read + Seek>(source: R) -> Result<Profile, IngestError> {
 
 /// Counts of samples and constant-pool entries that could not be used, kept
 /// purely for diagnosing recordings that ingest with fewer threads or
-/// samples than expected. Logged to stderr, never surfaced in the `Profile`.
+/// samples than expected. Reported through the `log` crate, never surfaced
+/// in the `Profile`.
 #[derive(Default)]
 struct Diagnostics {
     execution_samples_seen: usize,
@@ -303,7 +311,7 @@ impl ProfileInterner {
             Ok(thread) => thread,
             Err(err) => {
                 self.diagnostics.thread_decode_failures += 1;
-                eprintln!(
+                log::debug!(
                     "jfr-ingest: failed to decode a sampledThread constant-pool entry as JdkThread: {err} (raw value: {value:?})"
                 );
                 return None;
@@ -325,9 +333,9 @@ impl ProfileInterner {
         }))
     }
 
-    /// Prints a one-line summary to stderr when any sample or constant-pool
-    /// entry was dropped during ingestion, to help diagnose recordings that
-    /// come out with fewer threads or samples than expected.
+    /// Logs a one-line summary when any sample or constant-pool entry was
+    /// dropped during ingestion, to help diagnose recordings that come out
+    /// with fewer threads or samples than expected.
     fn log_diagnostics(&self) {
         let d = &self.diagnostics;
         let kept = self.samples.len();
@@ -335,7 +343,7 @@ impl ProfileInterner {
         if dropped == 0 && d.stack_pool_unresolved == 0 && d.thread_pool_unresolved == 0 {
             return;
         }
-        eprintln!(
+        log::warn!(
             "jfr-ingest: {} {EXECUTION_SAMPLE} seen, {kept} kept, {dropped} dropped \
              (missing startTime: {}, missing stack: {}, missing thread: {}; \
              unresolved constant-pool refs: stack {}, thread {}; \
@@ -401,7 +409,7 @@ fn intern_pooled<T: Copy>(
     }
     let Some(resolved) = raw.resolve() else {
         *unresolved += 1;
-        eprintln!(
+        log::debug!(
             "jfr-ingest: constant-pool index {key} for field {field:?} could not be resolved \
              (no matching checkpoint in this chunk)"
         );
