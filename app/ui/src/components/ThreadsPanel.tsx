@@ -1,41 +1,50 @@
-import { For, createMemo, createSignal } from 'solid-js';
+import { For, Show, createMemo, createSignal } from 'solid-js';
 import type { ProfileSummary } from '../api/client';
 import type { ProfileStore } from '../state/profile';
 
 /**
  * Thread selection, ordered by whole-recording activity so entries do not
- * jump around while the analyst filters. An empty selection is sent as-is:
- * the backend widens it back to every thread, per the spec.
+ * jump around while the analyst filters.
+ *
+ * No thread filter and every thread ticked narrow the same samples, so the
+ * panel keeps a single representation for it: no filter, nothing ticked.
+ * Picking a thread from there narrows to that thread alone instead of
+ * excluding it — the analyst who clicks a name is asking to see it, and it
+ * spares them the deselect-everything-first detour. Once a filter exists the
+ * ticks mean what they usually do: add, remove, invert.
  */
 export function ThreadsPanel(props: { store: ProfileStore; summary: ProfileSummary }) {
   const [nameFilter, setNameFilter] = createSignal('');
 
   const allIds = () => props.summary.threads.map((t) => t.id);
 
-  // `null` means "no thread filter": every thread selected.
+  // `null` means "no thread filter": every thread contributes.
   const selected = () => props.store.filters().threads ?? null;
 
-  const isChecked = (id: number) => {
-    const ids = selected();
-    return ids === null || ids.includes(id);
-  };
+  const isChecked = (id: number) => selected()?.includes(id) ?? false;
 
-  const selectedCount = () => selected()?.length ?? props.summary.threads.length;
-
+  // Neither an empty nor a complete selection is a filter, and both read as
+  // "no filter" in this panel: they are normalised away as they are made, so
+  // "every thread" has exactly one representation.
   const setThreads = (ids: number[] | null) => {
     props.store.setFilters({
       ...props.store.filters(),
-      threads: ids === null || ids.length === allIds().length ? undefined : ids,
+      threads:
+        ids === null || ids.length === 0 || ids.length === allIds().length ? undefined : ids,
     });
   };
 
   const toggle = (id: number) => {
-    const base = selected() ?? allIds();
+    const base = selected();
+    if (base === null) {
+      setThreads([id]);
+      return;
+    }
     setThreads(base.includes(id) ? base.filter((t) => t !== id) : [...base, id]);
   };
 
   const invert = () => {
-    const current = selected() ?? allIds();
+    const current = selected() ?? [];
     setThreads(allIds().filter((id) => !current.includes(id)));
   };
 
@@ -59,7 +68,8 @@ export function ThreadsPanel(props: { store: ProfileStore; summary: ProfileSumma
     <aside class="threads-panel" aria-label="Threads">
       <header>
         <h3>
-          Threads ({selectedCount()}/{props.summary.threads.length})
+          Threads (
+          {selected() === null ? 'all' : `${selected()!.length}/${props.summary.threads.length}`})
         </h3>
         <input
           type="search"
@@ -69,6 +79,9 @@ export function ThreadsPanel(props: { store: ProfileStore; summary: ProfileSumma
           onInput={(e) => setNameFilter(e.currentTarget.value)}
         />
       </header>
+      <Show when={selected() === null}>
+        <p class="thread-hint">No thread filter: every thread is included. Pick one to narrow.</p>
+      </Show>
       <ul>
         <For each={rows()}>
           {({ thread, count }) => (
@@ -87,8 +100,13 @@ export function ThreadsPanel(props: { store: ProfileStore; summary: ProfileSumma
         </For>
       </ul>
       <footer class="thread-actions">
-        <button onClick={() => setThreads(null)}>All</button>
-        <button onClick={() => setThreads([])}>None</button>
+        <button
+          disabled={selected() === null}
+          title="Drop the thread filter: every thread is included"
+          onClick={() => setThreads(null)}
+        >
+          Clear
+        </button>
         <button onClick={invert}>Invert</button>
       </footer>
     </aside>

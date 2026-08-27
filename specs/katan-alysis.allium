@@ -760,6 +760,14 @@ surface TopMethodsView {
         -- matches no sample — a thread that was idle throughout the
         -- selected window, say.
 
+    @guarantee PickingAThreadNarrowsToItAlone
+        -- No thread selection and a selection holding every thread
+        -- narrow the same samples, so the thread panel shows one state
+        -- for both: nothing marked as picked. Picking a thread from
+        -- there narrows to that thread alone rather than excluding it,
+        -- and unpicking the last one returns to that state. The analyst
+        -- never has to empty the selection before building one.
+
     @guarantee ThreadsAreOrderedByActivity
         -- The thread panel lists threads by decreasing whole-recording
         -- sample count. The shares shown next to them are read against
