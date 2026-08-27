@@ -42,28 +42,63 @@ describe('ThreadsPanel', () => {
     });
   });
 
-  it('starts with every thread selected', () => {
+  it('starts with no thread ticked, filtering nothing', () => {
     createRoot((dispose) => {
-      renderPanel(filterStore());
-      expect(screen.getByText('Threads (3/3)')).toBeInTheDocument();
-      expect(screen.getAllByRole('checkbox').every((c) => (c as HTMLInputElement).checked)).toBe(
-        true,
+      const store = filterStore();
+      renderPanel(store);
+      expect(screen.getByText('Threads (all)')).toBeInTheDocument();
+      expect(screen.getAllByRole('checkbox').some((c) => (c as HTMLInputElement).checked)).toBe(
+        false,
       );
+      expect(store.filters().threads).toBeUndefined();
+      expect(screen.getByText(/every thread is included/)).toBeInTheDocument();
       dispose();
     });
   });
 
-  it('unchecking a thread narrows the filter to the others', async () => {
+  it('narrows to the single thread picked first, rather than excluding it', async () => {
     const store = filterStore();
     renderPanel(store);
 
     await userEvent.click(screen.getByRole('checkbox', { name: /main/ }));
-    expect(store.filters().threads).toEqual(expect.arrayContaining([1, 2]));
-    expect(store.filters().threads).toHaveLength(2);
-    expect(screen.getByText('Threads (2/3)')).toBeInTheDocument();
+    expect(store.filters().threads).toEqual([0]);
+    expect(screen.getByText('Threads (1/3)')).toBeInTheDocument();
   });
 
-  it('re-checking the last missing thread widens back to no filter', async () => {
+  it('keeps the time filter when the first thread is picked', async () => {
+    const store = filterStore();
+    store.setFilters({ time_range_nanos: [0, 500] });
+    renderPanel(store);
+
+    await userEvent.click(screen.getByRole('checkbox', { name: /worker-1/ }));
+    expect(store.filters().threads).toEqual([1]);
+    expect(store.filters().time_range_nanos).toEqual([0, 500]);
+  });
+
+  it('adds and removes threads once a filter exists', async () => {
+    const store = filterStore();
+    store.setFilters({ threads: [1] });
+    renderPanel(store);
+
+    await userEvent.click(screen.getByRole('checkbox', { name: /worker-2/ }));
+    expect(store.filters().threads).toEqual([1, 2]);
+
+    await userEvent.click(screen.getByRole('checkbox', { name: /worker-1/ }));
+    expect(store.filters().threads).toEqual([2]);
+    expect(screen.getByText('Threads (1/3)')).toBeInTheDocument();
+  });
+
+  it('unticking the last ticked thread drops the filter instead of emptying it', async () => {
+    const store = filterStore();
+    store.setFilters({ threads: [1] });
+    renderPanel(store);
+
+    await userEvent.click(screen.getByRole('checkbox', { name: /worker-1/ }));
+    expect(store.filters().threads).toBeUndefined();
+    expect(screen.getByText('Threads (all)')).toBeInTheDocument();
+  });
+
+  it('ticking every thread collapses back to no filter', async () => {
     const store = filterStore();
     store.setFilters({ threads: [1, 2] });
     renderPanel(store);
@@ -72,24 +107,22 @@ describe('ThreadsPanel', () => {
     expect(store.filters().threads).toBeUndefined();
   });
 
-  it('None empties the selection without touching the time filter', async () => {
+  it('Clear drops the thread filter without touching the time filter', async () => {
     const store = filterStore();
-    store.setFilters({ time_range_nanos: [0, 500] });
+    store.setFilters({ threads: [1], time_range_nanos: [0, 500] });
     renderPanel(store);
 
-    await userEvent.click(screen.getByRole('button', { name: 'None' }));
-    expect(store.filters().threads).toEqual([]);
+    await userEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(store.filters().threads).toBeUndefined();
     expect(store.filters().time_range_nanos).toEqual([0, 500]);
-    expect(screen.getByText('Threads (0/3)')).toBeInTheDocument();
   });
 
-  it('All restores the unfiltered state', async () => {
-    const store = filterStore();
-    store.setFilters({ threads: [1] });
-    renderPanel(store);
-
-    await userEvent.click(screen.getByRole('button', { name: 'All' }));
-    expect(store.filters().threads).toBeUndefined();
+  it('offers no Clear while there is no thread filter', () => {
+    createRoot((dispose) => {
+      renderPanel(filterStore());
+      expect(screen.getByRole('button', { name: 'Clear' })).toBeDisabled();
+      dispose();
+    });
   });
 
   it('Invert flips the selection', async () => {
@@ -100,6 +133,14 @@ describe('ThreadsPanel', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Invert' }));
     expect(store.filters().threads).toEqual(expect.arrayContaining([0, 2]));
     expect(store.filters().threads).toHaveLength(2);
+  });
+
+  it('Invert on the unfiltered panel stays unfiltered', async () => {
+    const store = filterStore();
+    renderPanel(store);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Invert' }));
+    expect(store.filters().threads).toBeUndefined();
   });
 
   it('filters the list by name without changing the selection', async () => {
