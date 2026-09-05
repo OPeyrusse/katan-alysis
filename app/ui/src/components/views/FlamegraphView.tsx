@@ -1,17 +1,18 @@
-import { Show, createEffect, createMemo, createSignal } from 'solid-js';
+import { Show, createEffect, createMemo, createSignal, onCleanup } from 'solid-js';
 import { frameLabel, type FlameNode, type ProfileSummary } from '../../api/client';
 import type { ProfileStore } from '../../state/profile';
 import {
+  cellAt,
   findPath,
   frameColor,
   layoutFlameWithAncestors,
   rectAt,
   type FlameRect,
 } from '../../render/flamegraph';
-import { fractionAt } from '../../render/timeline';
 
-/** Internal canvas resolution; CSS stretches the width to the panel. */
-const WIDTH = 960;
+/** Canvas width used until the panel can be measured. */
+const FALLBACK_WIDTH = 960;
+/** Height of a frame row, in CSS pixels. */
 const ROW_HEIGHT = 20;
 
 /**
@@ -27,8 +28,24 @@ const ROW_HEIGHT = 20;
 export function FlamegraphView(props: { store: ProfileStore; summary: ProfileSummary }) {
   const [zoomStack, setZoomStack] = createSignal<FlameNode[]>([]);
   const [hovered, setHovered] = createSignal<FlameRect>();
+  // The canvas is drawn at the panel's own width rather than stretched to
+  // it by CSS: a stretched canvas blurs its text and, worse, makes a row
+  // taller than the row height it was drawn with.
+  const [surfaceWidth, setSurfaceWidth] = createSignal(FALLBACK_WIDTH);
   let surface!: HTMLDivElement;
   let canvas!: HTMLCanvasElement;
+  let observer: ResizeObserver | undefined;
+
+  const trackWidth = (element: HTMLDivElement) => {
+    surface = element;
+    const measure = () => setSurfaceWidth(element.clientWidth || FALLBACK_WIDTH);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    observer?.disconnect();
+    observer = new ResizeObserver(measure);
+    observer.observe(element);
+  };
+  onCleanup(() => observer?.disconnect());
 
   createEffect(() => {
     props.store.flamegraph();
@@ -62,41 +79,54 @@ export function FlamegraphView(props: { store: ProfileStore; summary: ProfileSum
   });
 
   createEffect(() => {
-    const ctx = canvas?.getContext('2d');
-    if (!ctx) return;
+    if (!canvas) return;
+    const width = surfaceWidth();
     const height = rows() * ROW_HEIGHT;
-    canvas.width = WIDTH;
-    canvas.height = height;
-    ctx.clearRect(0, 0, WIDTH, height);
+    // Back the canvas at device resolution while sizing it, in CSS pixels,
+    // to exactly what it draws — so one drawn row is one row on screen.
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * ratio);
+    canvas.height = Math.round(height * ratio);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.clearRect(0, 0, width, height);
     ctx.font = '11px sans-serif';
     ctx.textBaseline = 'middle';
 
     for (const rect of rects()) {
-      const x = rect.x * WIDTH;
-      const width = Math.max(0.5, rect.width * WIDTH);
+      const x = rect.x * width;
+      const boxWidth = Math.max(0.5, rect.width * width);
       const y = rect.depth * ROW_HEIGHT;
       const label = labelOf(rect);
 
       ctx.fillStyle = frameColor(label);
-      ctx.fillRect(x, y, width, ROW_HEIGHT - 1);
+      ctx.fillRect(x, y, boxWidth, ROW_HEIGHT - 1);
 
       if (hovered() === rect) {
         ctx.strokeStyle = 'rgb(0 0 0 / 60%)';
         ctx.lineWidth = 1;
-        ctx.strokeRect(x + 0.5, y + 0.5, width - 1, ROW_HEIGHT - 2);
+        ctx.strokeRect(x + 0.5, y + 0.5, boxWidth - 1, ROW_HEIGHT - 2);
       }
 
-      if (width > 20) {
+      if (boxWidth > 20) {
         ctx.fillStyle = 'rgb(0 0 0 / 85%)';
-        ctx.fillText(clip(ctx, label, width - 6), x + 3, y + ROW_HEIGHT / 2);
+        ctx.fillText(clip(ctx, label, boxWidth - 6), x + 3, y + ROW_HEIGHT / 2);
       }
     }
   });
 
+  // The canvas's own box already moves with the surface's scroll, so it,
+  // and not the surface's, is what the pointer has to be resolved against.
   const rectUnderPointer = (event: { clientX: number; clientY: number }) => {
-    const bounds = surface.getBoundingClientRect();
-    const x = fractionAt(event.clientX, bounds.left, bounds.width);
-    const depth = Math.floor((event.clientY - bounds.top + surface.scrollTop) / ROW_HEIGHT);
+    const { depth, x } = cellAt(
+      event.clientX,
+      event.clientY,
+      canvas.getBoundingClientRect(),
+      rows(),
+    );
     return rectAt(rects(), depth, x);
   };
 
@@ -129,7 +159,7 @@ export function FlamegraphView(props: { store: ProfileStore; summary: ProfileSum
               <div
                 class="flame-surface"
                 data-testid="flame-surface"
-                ref={surface}
+                ref={trackWidth}
                 onPointerMove={(e) => setHovered(rectUnderPointer(e))}
                 onPointerLeave={() => setHovered(undefined)}
                 onClick={(e) => {

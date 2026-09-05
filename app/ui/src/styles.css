@@ -562,9 +562,10 @@ thead th {
   cursor: pointer;
 }
 
+/* Sized in JS to what it draws: stretching it would blur the text and
+   shift every row away from the pointer. */
 .flame-surface canvas {
   display: block;
-  width: 100%;
 }
 
 .flame-hover {
