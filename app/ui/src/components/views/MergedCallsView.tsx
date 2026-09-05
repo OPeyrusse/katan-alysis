@@ -1,13 +1,15 @@
 import { Show, createEffect, createMemo } from 'solid-js';
 import { frameLabel, type ProfileSummary } from '../../api/client';
 import type { ProfileStore } from '../../state/profile';
-import { frameColor, rectAt } from '../../render/flamegraph';
+import { cellAt, frameColor, rectAt } from '../../render/flamegraph';
 import { layoutMergedCalls, type MergedCallRect } from '../../render/mergedCalls';
-import { fractionAt } from '../../render/timeline';
+import { prepareCanvas } from '../../render/canvas';
+import { createElementSize } from '../elementSize';
 
-/** Internal canvas resolution; CSS stretches the width to the panel. */
-const WIDTH = 960;
+/** Height of a call row, in CSS pixels. */
 const ROW_HEIGHT = 20;
+/** Canvas size assumed while the panel cannot be measured. */
+const FALLBACK_SIZE = { width: 960, height: ROW_HEIGHT };
 
 /**
  * Callers and callees merged around one focused method: the analyst
@@ -18,7 +20,9 @@ const ROW_HEIGHT = 20;
  * time.
  */
 export function MergedCallsView(props: { store: ProfileStore; summary: ProfileSummary }) {
-  let surface!: HTMLDivElement;
+  // Drawn at the panel's own width rather than stretched to it by CSS, so
+  // rows land where the pointer expects them and the text stays crisp.
+  const [surfaceSize, trackSurface] = createElementSize(FALLBACK_SIZE);
   let canvas!: HTMLCanvasElement;
 
   const rects = createMemo(() => {
@@ -33,42 +37,40 @@ export function MergedCallsView(props: { store: ProfileStore; summary: ProfileSu
     rect.node.frame === null ? '' : frameLabel(props.summary.frames, rect.node.frame);
 
   createEffect(() => {
-    const ctx = canvas?.getContext('2d');
+    if (!canvas) return;
+    const width = surfaceSize().width;
+    const ctx = prepareCanvas(canvas, { width, height: rows() * ROW_HEIGHT });
     if (!ctx) return;
-    const height = rows() * ROW_HEIGHT;
-    canvas.width = WIDTH;
-    canvas.height = height;
-    ctx.clearRect(0, 0, WIDTH, height);
     ctx.font = '11px sans-serif';
     ctx.textBaseline = 'middle';
 
     for (const rect of rects()) {
-      const x = rect.x * WIDTH;
-      const width = Math.max(0.5, rect.width * WIDTH);
+      const x = rect.x * width;
+      const boxWidth = Math.max(0.5, rect.width * width);
       const y = (rect.depth - minDepth()) * ROW_HEIGHT;
       const label = labelOf(rect);
 
       ctx.fillStyle = frameColor(label);
-      ctx.fillRect(x, y, width, ROW_HEIGHT - 1);
+      ctx.fillRect(x, y, boxWidth, ROW_HEIGHT - 1);
 
       if (rect.depth === 0) {
         ctx.strokeStyle = 'rgb(0 0 0 / 60%)';
         ctx.lineWidth = 1;
-        ctx.strokeRect(x + 0.5, y + 0.5, width - 1, ROW_HEIGHT - 2);
+        ctx.strokeRect(x + 0.5, y + 0.5, boxWidth - 1, ROW_HEIGHT - 2);
       }
 
-      if (width > 20) {
+      if (boxWidth > 20) {
         ctx.fillStyle = 'rgb(0 0 0 / 85%)';
-        ctx.fillText(clip(ctx, label, width - 6), x + 3, y + ROW_HEIGHT / 2);
+        ctx.fillText(clip(ctx, label, boxWidth - 6), x + 3, y + ROW_HEIGHT / 2);
       }
     }
   });
 
+  // Resolved against the canvas's own box: rows are counted from the top
+  // of what is drawn, and callers start at a negative depth.
   const rectUnderPointer = (event: { clientX: number; clientY: number }) => {
-    const bounds = surface.getBoundingClientRect();
-    const x = fractionAt(event.clientX, bounds.left, bounds.width);
-    const depth = Math.floor((event.clientY - bounds.top) / ROW_HEIGHT) + minDepth();
-    return rectAt(rects(), depth, x);
+    const cell = cellAt(event.clientX, event.clientY, canvas.getBoundingClientRect(), rows());
+    return rectAt(rects(), cell.depth + minDepth(), cell.x);
   };
 
   return (
@@ -96,7 +98,7 @@ export function MergedCallsView(props: { store: ProfileStore; summary: ProfileSu
                 <div
                   class="merged-calls-surface"
                   data-testid="merged-calls-surface"
-                  ref={surface}
+                  ref={trackSurface}
                   onClick={(e) => {
                     const rect = rectUnderPointer(e);
                     if (rect && rect.node.frame !== null && rect.depth !== 0) {

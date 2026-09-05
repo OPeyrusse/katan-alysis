@@ -2,17 +2,20 @@ import { Show, createEffect, createMemo, createSignal } from 'solid-js';
 import { frameLabel, type FlameNode, type ProfileSummary } from '../../api/client';
 import type { ProfileStore } from '../../state/profile';
 import {
+  cellAt,
   findPath,
   frameColor,
   layoutFlameWithAncestors,
   rectAt,
   type FlameRect,
 } from '../../render/flamegraph';
-import { fractionAt } from '../../render/timeline';
+import { prepareCanvas } from '../../render/canvas';
+import { createElementSize } from '../elementSize';
 
-/** Internal canvas resolution; CSS stretches the width to the panel. */
-const WIDTH = 960;
+/** Height of a frame row, in CSS pixels. */
 const ROW_HEIGHT = 20;
+/** Canvas size assumed while the panel cannot be measured. */
+const FALLBACK_SIZE = { width: 960, height: ROW_HEIGHT };
 
 /**
  * The flamegraph: a call tree merging stacks that share a prefix, widths
@@ -27,8 +30,18 @@ const ROW_HEIGHT = 20;
 export function FlamegraphView(props: { store: ProfileStore; summary: ProfileSummary }) {
   const [zoomStack, setZoomStack] = createSignal<FlameNode[]>([]);
   const [hovered, setHovered] = createSignal<FlameRect>();
+  // The canvas is drawn at the panel's own width rather than stretched to
+  // it by CSS: a stretched canvas blurs its text and makes a row taller
+  // than the row height it was drawn with. The height is the graph's own —
+  // one row per depth — and the surface scrolls it.
+  const [surfaceSize, trackSurface] = createElementSize(FALLBACK_SIZE);
   let surface!: HTMLDivElement;
   let canvas!: HTMLCanvasElement;
+
+  const trackWidth = (element: HTMLDivElement) => {
+    surface = element;
+    trackSurface(element);
+  };
 
   createEffect(() => {
     props.store.flamegraph();
@@ -62,41 +75,44 @@ export function FlamegraphView(props: { store: ProfileStore; summary: ProfileSum
   });
 
   createEffect(() => {
-    const ctx = canvas?.getContext('2d');
+    if (!canvas) return;
+    const width = surfaceSize().width;
+    const ctx = prepareCanvas(canvas, { width, height: rows() * ROW_HEIGHT });
     if (!ctx) return;
-    const height = rows() * ROW_HEIGHT;
-    canvas.width = WIDTH;
-    canvas.height = height;
-    ctx.clearRect(0, 0, WIDTH, height);
     ctx.font = '11px sans-serif';
     ctx.textBaseline = 'middle';
 
     for (const rect of rects()) {
-      const x = rect.x * WIDTH;
-      const width = Math.max(0.5, rect.width * WIDTH);
+      const x = rect.x * width;
+      const boxWidth = Math.max(0.5, rect.width * width);
       const y = rect.depth * ROW_HEIGHT;
       const label = labelOf(rect);
 
       ctx.fillStyle = frameColor(label);
-      ctx.fillRect(x, y, width, ROW_HEIGHT - 1);
+      ctx.fillRect(x, y, boxWidth, ROW_HEIGHT - 1);
 
       if (hovered() === rect) {
         ctx.strokeStyle = 'rgb(0 0 0 / 60%)';
         ctx.lineWidth = 1;
-        ctx.strokeRect(x + 0.5, y + 0.5, width - 1, ROW_HEIGHT - 2);
+        ctx.strokeRect(x + 0.5, y + 0.5, boxWidth - 1, ROW_HEIGHT - 2);
       }
 
-      if (width > 20) {
+      if (boxWidth > 20) {
         ctx.fillStyle = 'rgb(0 0 0 / 85%)';
-        ctx.fillText(clip(ctx, label, width - 6), x + 3, y + ROW_HEIGHT / 2);
+        ctx.fillText(clip(ctx, label, boxWidth - 6), x + 3, y + ROW_HEIGHT / 2);
       }
     }
   });
 
+  // The canvas's own box already moves with the surface's scroll, so it,
+  // and not the surface's, is what the pointer has to be resolved against.
   const rectUnderPointer = (event: { clientX: number; clientY: number }) => {
-    const bounds = surface.getBoundingClientRect();
-    const x = fractionAt(event.clientX, bounds.left, bounds.width);
-    const depth = Math.floor((event.clientY - bounds.top + surface.scrollTop) / ROW_HEIGHT);
+    const { depth, x } = cellAt(
+      event.clientX,
+      event.clientY,
+      canvas.getBoundingClientRect(),
+      rows(),
+    );
     return rectAt(rects(), depth, x);
   };
 
@@ -129,7 +145,7 @@ export function FlamegraphView(props: { store: ProfileStore; summary: ProfileSum
               <div
                 class="flame-surface"
                 data-testid="flame-surface"
-                ref={surface}
+                ref={trackWidth}
                 onPointerMove={(e) => setHovered(rectUnderPointer(e))}
                 onPointerLeave={() => setHovered(undefined)}
                 onClick={(e) => {
