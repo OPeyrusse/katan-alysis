@@ -414,8 +414,6 @@ kbd {
 
 .timeline-strip canvas {
   display: block;
-  width: 100%;
-  height: 100%;
 }
 
 .timeline-window {
@@ -500,8 +498,6 @@ kbd {
 
 .chart-surface canvas {
   display: block;
-  width: 100%;
-  height: 100%;
 }
 
 .chart-cursor {
@@ -582,7 +578,6 @@ thead th {
 
 .heatmap-surface canvas {
   display: block;
-  width: 100%;
 }
 
 .heatmap-hover {

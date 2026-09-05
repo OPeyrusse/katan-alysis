@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, createSignal, onCleanup } from 'solid-js';
+import { Show, createEffect, createMemo, createSignal } from 'solid-js';
 import { frameLabel, type FlameNode, type ProfileSummary } from '../../api/client';
 import type { ProfileStore } from '../../state/profile';
 import {
@@ -9,11 +9,13 @@ import {
   rectAt,
   type FlameRect,
 } from '../../render/flamegraph';
+import { prepareCanvas } from '../../render/canvas';
+import { createElementSize } from '../elementSize';
 
-/** Canvas width used until the panel can be measured. */
-const FALLBACK_WIDTH = 960;
 /** Height of a frame row, in CSS pixels. */
 const ROW_HEIGHT = 20;
+/** Canvas size assumed while the panel cannot be measured. */
+const FALLBACK_SIZE = { width: 960, height: ROW_HEIGHT };
 
 /**
  * The flamegraph: a call tree merging stacks that share a prefix, widths
@@ -29,23 +31,17 @@ export function FlamegraphView(props: { store: ProfileStore; summary: ProfileSum
   const [zoomStack, setZoomStack] = createSignal<FlameNode[]>([]);
   const [hovered, setHovered] = createSignal<FlameRect>();
   // The canvas is drawn at the panel's own width rather than stretched to
-  // it by CSS: a stretched canvas blurs its text and, worse, makes a row
-  // taller than the row height it was drawn with.
-  const [surfaceWidth, setSurfaceWidth] = createSignal(FALLBACK_WIDTH);
+  // it by CSS: a stretched canvas blurs its text and makes a row taller
+  // than the row height it was drawn with. The height is the graph's own —
+  // one row per depth — and the surface scrolls it.
+  const [surfaceSize, trackSurface] = createElementSize(FALLBACK_SIZE);
   let surface!: HTMLDivElement;
   let canvas!: HTMLCanvasElement;
-  let observer: ResizeObserver | undefined;
 
   const trackWidth = (element: HTMLDivElement) => {
     surface = element;
-    const measure = () => setSurfaceWidth(element.clientWidth || FALLBACK_WIDTH);
-    measure();
-    if (typeof ResizeObserver === 'undefined') return;
-    observer?.disconnect();
-    observer = new ResizeObserver(measure);
-    observer.observe(element);
+    trackSurface(element);
   };
-  onCleanup(() => observer?.disconnect());
 
   createEffect(() => {
     props.store.flamegraph();
@@ -80,19 +76,9 @@ export function FlamegraphView(props: { store: ProfileStore; summary: ProfileSum
 
   createEffect(() => {
     if (!canvas) return;
-    const width = surfaceWidth();
-    const height = rows() * ROW_HEIGHT;
-    // Back the canvas at device resolution while sizing it, in CSS pixels,
-    // to exactly what it draws — so one drawn row is one row on screen.
-    const ratio = window.devicePixelRatio || 1;
-    canvas.width = Math.round(width * ratio);
-    canvas.height = Math.round(height * ratio);
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
-    const ctx = canvas.getContext('2d');
+    const width = surfaceSize().width;
+    const ctx = prepareCanvas(canvas, { width, height: rows() * ROW_HEIGHT });
     if (!ctx) return;
-    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    ctx.clearRect(0, 0, width, height);
     ctx.font = '11px sans-serif';
     ctx.textBaseline = 'middle';
 

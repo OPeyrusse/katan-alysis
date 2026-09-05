@@ -24,8 +24,10 @@ function brushStore(): ProfileStore {
 function renderBrush(store: ProfileStore) {
   render(() => <TimelineBrush store={store} summary={summary} />);
   const strip = screen.getByTestId('timeline-strip');
-  // jsdom has no layout: give the strip a concrete geometry.
-  strip.getBoundingClientRect = () =>
+  // jsdom has no layout: give the canvas, which the pointer is resolved
+  // against, a concrete geometry.
+  const canvas = strip.querySelector('canvas')!;
+  canvas.getBoundingClientRect = () =>
     ({ left: 0, width: 100, top: 0, height: 40, right: 100, bottom: 40 }) as DOMRect;
   return strip;
 }

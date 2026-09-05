@@ -7,11 +7,12 @@ import {
   fractionAt,
   rangeFractions,
 } from '../render/timeline';
+import { prepareCanvas } from '../render/canvas';
+import { createElementSize } from './elementSize';
 import { formatClock } from '../format';
 
-/** Internal canvas resolution; CSS stretches it to the strip's width. */
-const STRIP_WIDTH = 600;
-const STRIP_HEIGHT = 40;
+/** Strip size assumed while it cannot be measured; CSS sizes the strip. */
+const FALLBACK_SIZE = { width: 600, height: 40 };
 
 /**
  * The whole-recording density strip with the time-window brush. Dragging
@@ -19,9 +20,17 @@ const STRIP_HEIGHT = 40;
  * of a selection, not narrowing to nothing.
  */
 export function TimelineBrush(props: { store: ProfileStore; summary: ProfileSummary }) {
+  // Drawn at the strip's own size rather than stretched to it by CSS,
+  // which would blur the density bars.
+  const [stripSize, trackStripSize] = createElementSize(FALLBACK_SIZE);
   let strip!: HTMLDivElement;
   let canvas!: HTMLCanvasElement;
   const [drag, setDrag] = createSignal<{ from: number; to: number }>();
+
+  const trackStrip = (element: HTMLDivElement) => {
+    strip = element;
+    trackStripSize(element);
+  };
 
   const duration = () => props.summary.duration_nanos;
   const range = () => props.store.filters().time_range_nanos;
@@ -35,18 +44,20 @@ export function TimelineBrush(props: { store: ProfileStore; summary: ProfileSumm
 
   createEffect(() => {
     const density = props.store.density();
-    const ctx = canvas?.getContext('2d');
-    if (!density || !ctx) return;
-    ctx.clearRect(0, 0, STRIP_WIDTH, STRIP_HEIGHT);
+    if (!density || !canvas) return;
+    const { width, height } = stripSize();
+    const ctx = prepareCanvas(canvas, { width, height });
+    if (!ctx) return;
     ctx.fillStyle = '#7a9cc4';
     for (const bar of densityBars(density.counts)) {
-      const h = bar.height * STRIP_HEIGHT;
-      ctx.fillRect(bar.x * STRIP_WIDTH, STRIP_HEIGHT - h, bar.width * STRIP_WIDTH, h);
+      const h = bar.height * height;
+      ctx.fillRect(bar.x * width, height - h, bar.width * width, h);
     }
   });
 
+  // Read off the canvas's own box: it is what the bars were drawn into.
   const fractionOf = (event: PointerEvent) => {
-    const rect = strip.getBoundingClientRect();
+    const rect = canvas.getBoundingClientRect();
     return fractionAt(event.clientX, rect.left, rect.width);
   };
 
@@ -102,13 +113,13 @@ export function TimelineBrush(props: { store: ProfileStore; summary: ProfileSumm
       </header>
       <div
         class="timeline-strip"
-        ref={strip}
+        ref={trackStrip}
         data-testid="timeline-strip"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
       >
-        <canvas ref={canvas} width={STRIP_WIDTH} height={STRIP_HEIGHT} />
+        <canvas ref={canvas} />
         <Show when={shown()}>
           {(fractions) => (
             <div

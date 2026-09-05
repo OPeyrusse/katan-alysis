@@ -37,10 +37,14 @@ function mergedStore(selected: number | undefined, initial: MergedCallTree | und
 function renderView(store: ProfileStore) {
   render(() => <MergedCallsView store={store} summary={summary} />);
   const surface = screen.queryByTestId('merged-calls-surface');
-  if (surface) {
-    // jsdom has no layout: give the surface a concrete geometry.
-    surface.getBoundingClientRect = () =>
-      ({ left: 0, width: 100, top: 0, height: 60, right: 100, bottom: 60 }) as DOMRect;
+  const canvas = surface?.querySelector('canvas');
+  if (canvas) {
+    // jsdom has no layout: give the canvas the geometry the view sized it
+    // to, 100 CSS pixels wide.
+    canvas.getBoundingClientRect = () => {
+      const height = Number.parseFloat(canvas.style.height) || 0;
+      return { left: 0, width: 100, top: 0, height, right: 100, bottom: height } as DOMRect;
+    };
   }
   return surface;
 }

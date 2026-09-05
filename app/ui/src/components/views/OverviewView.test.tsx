@@ -80,6 +80,14 @@ async function renderOverview(overrides?: Parameters<typeof mockedClient>[0]) {
   return store;
 }
 
+// jsdom has no layout: give the chart's canvas, which the pointer is
+// resolved against, a concrete geometry.
+function giveGeometry(surface: Element) {
+  const canvas = surface.querySelector('canvas')!;
+  canvas.getBoundingClientRect = () =>
+    ({ left: 0, width: 100, top: 0, height: 90, right: 100, bottom: 90 }) as DOMRect;
+}
+
 function firePointer(target: Element, type: string, clientX = 0) {
   target.dispatchEvent(new MouseEvent(type, { clientX, bubbles: true }));
 }
@@ -126,8 +134,7 @@ describe('OverviewView', () => {
     const store = await renderOverview();
 
     const surface = screen.getByTestId('chart-CPU');
-    surface.getBoundingClientRect = () =>
-      ({ left: 0, width: 100, top: 0, height: 90, right: 100, bottom: 90 }) as DOMRect;
+    giveGeometry(surface);
 
     firePointer(surface, 'pointerdown', 25);
     firePointer(surface, 'pointerup', 75);
@@ -140,8 +147,7 @@ describe('OverviewView', () => {
     const store = await renderOverview();
 
     const surface = screen.getByTestId('chart-Heap');
-    surface.getBoundingClientRect = () =>
-      ({ left: 0, width: 100, top: 0, height: 90, right: 100, bottom: 90 }) as DOMRect;
+    giveGeometry(surface);
 
     firePointer(surface, 'pointerdown', 50);
     firePointer(surface, 'pointerup', 50);

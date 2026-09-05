@@ -41,8 +41,10 @@ function heatmapStore(initial: HeatmapGrid | undefined = grid()) {
 function renderView(store: ProfileStore) {
   render(() => <HeatmapView store={store} summary={summary} />);
   const surface = screen.getByTestId('heatmap-surface');
-  // jsdom has no layout: give the surface a concrete geometry.
-  surface.getBoundingClientRect = () =>
+  // jsdom has no layout: give the canvas, which the pointer is resolved
+  // against, a concrete geometry.
+  const canvas = surface.querySelector('canvas')!;
+  canvas.getBoundingClientRect = () =>
     ({ left: 0, width: 100, top: 0, height: 100, right: 100, bottom: 100 }) as DOMRect;
   return surface;
 }
