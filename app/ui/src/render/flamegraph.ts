@@ -8,6 +8,7 @@
 // fills the full width and its ancestors are simply not laid out.
 
 import type { FlameNode } from '../api/client';
+import { fractionAt } from './timeline';
 
 export interface FlameRect {
   node: FlameNode;
@@ -90,4 +91,32 @@ export function frameColor(label: string): string {
   const saturation = 55 + (Math.floor(unsigned / 48) % 30);
   const lightness = 45 + (Math.floor(unsigned / 1440) % 20);
   return `hsl(${hue}deg ${saturation}% ${lightness}%)`;
+}
+
+/** The rendered box of the canvas, in client coordinates. */
+export interface CanvasBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * The row and horizontal fraction a pointer lands on, read off the box the
+ * canvas actually occupies on screen rather than off its drawing
+ * resolution: CSS is free to scale a canvas, and in a scaled canvas a row
+ * is no longer as tall as the row height it was drawn with — an error that
+ * compounds with depth, so the deeper the stack the further the hit test
+ * drifts from the frame under the cursor.
+ */
+export function cellAt(
+  clientX: number,
+  clientY: number,
+  box: CanvasBox,
+  rows: number,
+): { depth: number; x: number } {
+  const x = fractionAt(clientX, box.left, box.width);
+  const rowHeight = rows > 0 ? box.height / rows : 0;
+  const depth = rowHeight > 0 ? Math.floor((clientY - box.top) / rowHeight) : -1;
+  return { depth, x };
 }

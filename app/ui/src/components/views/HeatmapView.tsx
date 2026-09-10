@@ -10,11 +10,14 @@ import {
   layoutHeatmap,
 } from '../../render/heatmap';
 import { fractionAt } from '../../render/timeline';
+import { prepareCanvas } from '../../render/canvas';
+import { createElementSize } from '../elementSize';
 import { formatClock } from '../../format';
 
-/** Internal canvas resolution; CSS stretches it to the panel. */
-const WIDTH = 720;
+/** Height of the heatmap, in CSS pixels; the width follows the panel. */
 const HEIGHT = 300;
+/** Canvas size assumed while the panel cannot be measured. */
+const FALLBACK_SIZE = { width: 720, height: HEIGHT };
 
 interface Cell {
   column: number;
@@ -29,8 +32,16 @@ interface Cell {
  * second when the drag stays within a single column.
  */
 export function HeatmapView(props: { store: ProfileStore; summary: ProfileSummary }) {
+  // Drawn at the panel's own width rather than stretched to it by CSS,
+  // which would soften every cell edge.
+  const [surfaceSize, trackSurface] = createElementSize(FALLBACK_SIZE);
   let surface!: HTMLDivElement;
   let canvas!: HTMLCanvasElement;
+
+  const trackWidth = (element: HTMLDivElement) => {
+    surface = element;
+    trackSurface(element);
+  };
   const [drag, setDrag] = createSignal<{ start: Cell; current: Cell }>();
   const [hovered, setHovered] = createSignal<Cell>();
 
@@ -58,21 +69,20 @@ export function HeatmapView(props: { store: ProfileStore; summary: ProfileSummar
   };
 
   createEffect(() => {
-    const ctx = canvas?.getContext('2d');
     const g = grid();
-    if (!ctx || !g) return;
-    canvas.width = WIDTH;
-    canvas.height = HEIGHT;
-    ctx.clearRect(0, 0, WIDTH, HEIGHT);
+    if (!canvas || !g) return;
+    const width = surfaceSize().width;
+    const ctx = prepareCanvas(canvas, { width, height: HEIGHT });
+    if (!ctx) return;
     const timeRangeNanos = props.store.filters().time_range_nanos;
     for (const cell of cells()) {
       ctx.fillStyle = cellInSelection(g, cell.column, cell.row, timeRangeNanos)
         ? heatmapIntensityColor(cell.count, g.max_count)
         : heatmapContextColor(g.context_columns[cell.column]?.[cell.row] ?? 0, g.context_max_count);
       ctx.fillRect(
-        cell.x * WIDTH,
+        cell.x * width,
         cell.y * HEIGHT,
-        Math.max(1, cell.width * WIDTH),
+        Math.max(1, cell.width * width),
         Math.max(1, cell.height * HEIGHT),
       );
     }
@@ -84,18 +94,20 @@ export function HeatmapView(props: { store: ProfileStore; summary: ProfileSummar
       const r0 = Math.min(d.start.row, d.current.row);
       const r1 = Math.max(d.start.row, d.current.row);
       const columns = g.columns.length;
-      const x = (c0 / columns) * WIDTH;
-      const width = ((c1 - c0 + 1) / columns) * WIDTH;
+      const x = (c0 / columns) * width;
+      const boxWidth = ((c1 - c0 + 1) / columns) * width;
       const y = (r0 / g.rows) * HEIGHT;
-      const height = ((r1 - r0 + 1) / g.rows) * HEIGHT;
+      const boxHeight = ((r1 - r0 + 1) / g.rows) * HEIGHT;
       ctx.strokeStyle = 'rgb(0 0 0 / 70%)';
       ctx.lineWidth = 1;
-      ctx.strokeRect(x + 0.5, y + 0.5, Math.max(0, width - 1), Math.max(0, height - 1));
+      ctx.strokeRect(x + 0.5, y + 0.5, Math.max(0, boxWidth - 1), Math.max(0, boxHeight - 1));
     }
   });
 
+  // Resolved against the canvas's own box, which no longer necessarily
+  // fills the surface once the canvas is not stretched to it.
   const cellUnderPointer = (event: { clientX: number; clientY: number }): Cell | undefined => {
-    const bounds = surface.getBoundingClientRect();
+    const bounds = canvas.getBoundingClientRect();
     const x = fractionAt(event.clientX, bounds.left, bounds.width);
     const y = fractionAt(event.clientY, bounds.top, bounds.height);
     const g = grid();
@@ -137,7 +149,7 @@ export function HeatmapView(props: { store: ProfileStore; summary: ProfileSummar
           <div
             class="heatmap-surface"
             data-testid="heatmap-surface"
-            ref={surface}
+            ref={trackWidth}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerLeave={() => setHovered(undefined)}

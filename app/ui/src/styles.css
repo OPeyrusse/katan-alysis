@@ -414,8 +414,6 @@ kbd {
 
 .timeline-strip canvas {
   display: block;
-  width: 100%;
-  height: 100%;
 }
 
 .timeline-window {
@@ -500,8 +498,6 @@ kbd {
 
 .chart-surface canvas {
   display: block;
-  width: 100%;
-  height: 100%;
 }
 
 .chart-cursor {
@@ -562,9 +558,10 @@ thead th {
   cursor: pointer;
 }
 
+/* Sized in JS to what it draws: stretching it would blur the text and
+   shift every row away from the pointer. */
 .flame-surface canvas {
   display: block;
-  width: 100%;
 }
 
 .flame-hover {
@@ -581,7 +578,6 @@ thead th {
 
 .heatmap-surface canvas {
   display: block;
-  width: 100%;
 }
 
 .heatmap-hover {

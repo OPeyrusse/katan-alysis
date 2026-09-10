@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { FlameNode } from '../api/client';
-import { findPath, frameColor, layoutFlame, layoutFlameWithAncestors, rectAt } from './flamegraph';
+import {
+  cellAt,
+  findPath,
+  frameColor,
+  layoutFlame,
+  layoutFlameWithAncestors,
+  rectAt,
+} from './flamegraph';
 
 function node(frame: number | null, samples: number, children: FlameNode[] = []): FlameNode {
   return { frame, samples, children };
@@ -132,5 +139,31 @@ describe('frameColor', () => {
 
   it('varies across different labels', () => {
     expect(frameColor('java.util.HashMap.resize')).not.toBe(frameColor('java.lang.Thread.run'));
+  });
+});
+
+describe('cellAt', () => {
+  const box = { left: 100, top: 50, width: 400, height: 80 }; // 4 rows of 20
+
+  it('reads the row and the horizontal fraction off the box', () => {
+    expect(cellAt(200, 55, box, 4)).toEqual({ depth: 0, x: 0.25 });
+    expect(cellAt(300, 75, box, 4)).toEqual({ depth: 1, x: 0.5 });
+    expect(cellAt(500, 129, box, 4)).toEqual({ depth: 3, x: 1 });
+  });
+
+  it('stays aligned when the box is scaled, however deep the row', () => {
+    // The same four rows rendered 25 pixels tall: assuming the drawn row
+    // height here would put the pointer a whole row off by depth 3.
+    const scaled = { ...box, height: 100 };
+    expect(cellAt(200, 55, scaled, 4)).toEqual({ depth: 0, x: 0.25 });
+    expect(cellAt(200, 145, scaled, 4)).toEqual({ depth: 3, x: 0.25 });
+  });
+
+  it('reports a row above the first as a negative depth, which no rect covers', () => {
+    expect(cellAt(200, 30, box, 4).depth).toBeLessThan(0);
+  });
+
+  it('has no row to report without any', () => {
+    expect(cellAt(200, 55, { ...box, height: 0 }, 0)).toEqual({ depth: -1, x: 0.25 });
   });
 });

@@ -46,9 +46,20 @@ function flameStore(initial: FlameNode | undefined = tree()) {
 function renderView(store: ProfileStore) {
   render(() => <FlamegraphView store={store} summary={summary} />);
   const surface = screen.getByTestId('flame-surface');
-  // jsdom has no layout: give the surface a concrete geometry.
-  surface.getBoundingClientRect = () =>
-    ({ left: 0, width: 100, top: 0, height: 40, right: 100, bottom: 40 }) as DOMRect;
+  const canvas = surface.querySelector('canvas')!;
+  // jsdom has no layout: give the canvas the geometry the view sized it
+  // to, 100 CSS pixels wide and scrolled with its surface.
+  canvas.getBoundingClientRect = () => {
+    const height = Number.parseFloat(canvas.style.height) || 0;
+    return {
+      left: 0,
+      width: 100,
+      top: -surface.scrollTop,
+      height,
+      right: 100,
+      bottom: height - surface.scrollTop,
+    } as DOMRect;
+  };
   return surface;
 }
 
