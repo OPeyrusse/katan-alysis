@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    katan_alysis_lib::run()
+    let verbose = std::env::args().any(|arg| arg == "--verbose" || arg == "-v");
+    katan_alysis_lib::run(verbose)
 }
