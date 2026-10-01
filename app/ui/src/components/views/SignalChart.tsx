@@ -2,10 +2,11 @@ import { Show, createEffect } from 'solid-js';
 import type { GcPause, TimePoint } from '../../api/client';
 import { pauseBars, seriesPath, type UnitPoint } from '../../render/charts';
 import { brushedRange, fractionAt } from '../../render/timeline';
+import { prepareCanvas, type Size } from '../../render/canvas';
+import { createElementSize } from '../elementSize';
 
-/** Internal canvas resolution; CSS stretches to the chart's width. */
-const WIDTH = 600;
-const HEIGHT = 90;
+/** Chart size assumed while it cannot be measured; CSS sizes the chart. */
+const FALLBACK_SIZE = { width: 600, height: 90 };
 
 export interface Series {
   label: string;
@@ -21,8 +22,12 @@ export interface ChartInteraction {
   onBrush: (range: [number, number]) => void;
 }
 
-function drawLines(ctx: CanvasRenderingContext2D, series: Series[], paths: UnitPoint[][]) {
-  ctx.clearRect(0, 0, WIDTH, HEIGHT);
+function drawLines(
+  ctx: CanvasRenderingContext2D,
+  size: Size,
+  series: Series[],
+  paths: UnitPoint[][],
+) {
   series.forEach((s, i) => {
     const path = paths[i];
     if (path.length === 0) return;
@@ -31,8 +36,8 @@ function drawLines(ctx: CanvasRenderingContext2D, series: Series[], paths: UnitP
     ctx.setLineDash(s.dashed ? [4, 3] : []);
     ctx.beginPath();
     path.forEach((p, j) => {
-      const x = p.x * WIDTH;
-      const y = (1 - p.y) * HEIGHT;
+      const x = p.x * size.width;
+      const y = (1 - p.y) * size.height;
       if (j === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });
@@ -58,7 +63,9 @@ export function SignalChart(props: {
   /** Shown when every series is empty. */
   emptyText?: string;
 }) {
-  let surface!: HTMLDivElement;
+  // Drawn at the chart's own size rather than stretched to it by CSS,
+  // which would soften every line.
+  const [chartSize, trackChartSize] = createElementSize(FALLBACK_SIZE);
   let canvas!: HTMLCanvasElement;
   let dragFrom: number | undefined;
 
@@ -67,26 +74,28 @@ export function SignalChart(props: {
     (props.pauses ?? []).length > 0;
 
   createEffect(() => {
-    const ctx = canvas?.getContext('2d');
+    if (!canvas) return;
+    const size = chartSize();
+    const ctx = prepareCanvas(canvas, size);
     if (!ctx) return;
     if (props.series) {
       const paths = props.series.map((s) =>
         seriesPath(s.points, props.durationNanos, props.ceiling),
       );
-      drawLines(ctx, props.series, paths);
+      drawLines(ctx, size, props.series, paths);
     }
     if (props.pauses) {
-      ctx.clearRect(0, 0, WIDTH, HEIGHT);
       ctx.fillStyle = '#c47a4a';
       for (const bar of pauseBars(props.pauses, props.durationNanos)) {
-        const h = Math.max(2, bar.height * HEIGHT);
-        ctx.fillRect(bar.x * WIDTH - 1, HEIGHT - h, 2, h);
+        const h = Math.max(2, bar.height * size.height);
+        ctx.fillRect(bar.x * size.width - 1, size.height - h, 2, h);
       }
     }
   });
 
+  // Read off the canvas's own box: it is what the series were drawn into.
   const fractionOf = (event: PointerEvent) => {
-    const rect = surface.getBoundingClientRect();
+    const rect = canvas.getBoundingClientRect();
     return fractionAt(event.clientX, rect.left, rect.width);
   };
 
@@ -108,7 +117,7 @@ export function SignalChart(props: {
       >
         <div
           class="chart-surface"
-          ref={surface}
+          ref={trackChartSize}
           data-testid={`chart-${props.title}`}
           onPointerDown={(e) => {
             dragFrom = fractionOf(e);
@@ -123,7 +132,7 @@ export function SignalChart(props: {
             if (range) props.interaction.onBrush(range);
           }}
         >
-          <canvas ref={canvas} width={WIDTH} height={HEIGHT} />
+          <canvas ref={canvas} />
           <Show when={props.interaction.cursor !== undefined}>
             <div
               class="chart-cursor"
